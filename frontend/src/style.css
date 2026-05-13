@@ -34,12 +34,6 @@ body:has(.rg-media-card [data-role="video-axes"][data-iq-visible="true"]) .rg-ap
   min-height: 0;
 }
 
-#app .hint {
-  overflow-wrap: anywhere;
-  max-width: 100%;
-  margin: 0.5rem 0 0;
-}
-
 .rg-app__toolbar {
   flex: 0 0 auto;
   display: flex;
@@ -58,23 +52,6 @@ body:has(.rg-media-card [data-role="video-axes"][data-iq-visible="true"]) .rg-ap
   color: #e8eaed;
   flex: 0 0 auto;
   white-space: nowrap;
-}
-
-.rg-app__hint {
-  margin: 0;
-  min-width: 0;
-  font-size: 0.82rem;
-  color: #9aa0a6;
-}
-
-.rg-app__hint > summary {
-  cursor: pointer;
-  color: #8ab4f8;
-  list-style: none;
-}
-
-.rg-app__hint > summary::-webkit-details-marker {
-  display: none;
 }
 
 .rg-dashboard {
@@ -165,8 +142,52 @@ body:has(.rg-media-card [data-role="video-axes"][data-iq-visible="true"]) .rg-ap
 }
 
 /* Header already has a bottom rule — avoid a double line above the first section */
-.rg-stream-box > details.rg-subexpando:first-of-type {
+.rg-stream-box > details.rg-subexpando:first-of-type,
+.rg-object > details.rg-subexpando:first-of-type {
   border-top: none;
+}
+
+/*
+ * Object-centered grouping: each per-stream box contains 1..N <article class="rg-object"> blocks
+ * (Plotter, Generator). Each object owns its Configuration / Control / Status rg-subexpando set.
+ */
+.rg-object {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-top: 1px solid #2d333d;
+  background: #12141a;
+}
+
+.rg-object:first-of-type {
+  border-top: none;
+}
+
+.rg-object__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.75rem;
+  padding: 0.55rem var(--rg-edge) 0.4rem;
+  background: linear-gradient(180deg, #1a1f28 0%, #161a22 100%);
+  border-bottom: 1px solid #2a3038;
+}
+
+.rg-object__title {
+  margin: 0;
+  font-size: 0.88rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #e8eaed;
+}
+
+.rg-object--plotter .rg-object__title {
+  color: #8ab4f8;
+}
+
+.rg-object--generator .rg-object__title {
+  color: #f6c178;
 }
 
 .rg-subexpando__summary {
@@ -594,10 +615,6 @@ body:has(.rg-media-card [data-role="video-axes"][data-iq-visible="true"]) .rg-ap
   margin-right: 0.35rem;
 }
 
-.va-axis-hint {
-  opacity: 0.85;
-}
-
 .va-symbol-col {
   grid-column: 1;
   grid-row: 2;
@@ -736,11 +753,8 @@ body:has(.rg-media-card [data-role="video-axes"][data-iq-visible="true"]) .rg-ap
   margin-block-start: 0.75rem;
 }
 
-.panel-status-meta {
-  margin: -0.35rem 0 0.75rem;
-  font-size: 0.75rem;
-  line-height: 1.45;
-  color: #7c838a;
+.panel-status .status-dl + .status-dl {
+  margin-top: 0.35rem;
 }
 
 .panel-status .status-dl {
@@ -807,92 +821,14 @@ body:has(.rg-media-card [data-role="video-axes"][data-iq-visible="true"]) .rg-ap
   word-break: break-all;
 }
 
-.status-dl dd.panel-status-pipeline--active {
-  align-self: start;
+.status-dl dt.status-dl-plotter-extra {
+  font-size: 0.82rem;
+  color: #8b939b;
 }
 
-.panel-status-pipeline {
-  margin: 0;
-  min-height: 1.25rem;
-}
-
-.panel-status-pipeline--active {
-  margin-top: 0.15rem;
-  word-break: normal;
-}
-
-.pipeline-stages-placeholder {
-  color: #7c838a;
-}
-
-.pipeline-stages {
-  display: flex;
-  flex-direction: column;
-  gap: 0.55rem;
-}
-
-.pipeline-block {
-  padding: 0.4rem 0.5rem 0.45rem;
-  background: linear-gradient(145deg, rgba(138, 180, 248, 0.08), rgba(30, 34, 42, 0.92));
-  border: 1px solid rgba(138, 180, 248, 0.18);
-  border-radius: 8px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22);
-}
-
-.pipeline-block__title {
-  font-size: 0.62rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: #8ab4f8;
-  margin-bottom: 0.35rem;
-  opacity: 0.95;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.pipeline-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.4rem;
-}
-
-.pipeline-row--single {
-  grid-template-columns: 1fr;
-}
-
-@media (max-width: 420px) {
-  .pipeline-row {
-    grid-template-columns: 1fr;
-  }
-}
-
-.pipeline-metric {
-  display: flex;
-  flex-direction: column;
-  gap: 0.12rem;
-  padding: 0.32rem 0.4rem;
-  background: rgba(0, 0, 0, 0.22);
-  border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  min-width: 0;
-}
-
-.pipeline-metric__label {
-  font-size: 0.65rem;
-  font-weight: 500;
-  color: #9aa0a6;
-  line-height: 1.2;
-}
-
-.pipeline-metric__value {
-  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.88rem;
-  font-weight: 600;
+.status-dl dd.status-dl-plotter-extra {
   font-variant-numeric: tabular-nums;
-  color: #e8eaed;
-  letter-spacing: -0.02em;
+  word-break: normal;
 }
 
 /* Hoist dt/dd into .status-dl grid so one pair can be toggled without breaking columns. */
@@ -916,18 +852,6 @@ body:has(.rg-media-card [data-role="video-axes"][data-iq-visible="true"]) .rg-ap
   color: #bdc1c6;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-}
-
-.control-group-desc {
-  margin: 0 0 0.5rem;
-  font-size: 0.72rem;
-  line-height: 1.45;
-  color: #7c838a;
-}
-
-.control-group-desc code {
-  font-size: 0.68rem;
-  color: #9aa0a6;
 }
 
 .control-group .toolbar {
@@ -1035,22 +959,6 @@ select.iq-cfg-input {
   font-size: 0.9rem;
 }
 
-.hint {
-  margin: 0 0 1rem;
-  color: #7c838a;
-  font-size: 0.85rem;
-  line-height: 1.45;
-}
-
-.hint code {
-  font-size: 0.8rem;
-  color: #bdc1c6;
-}
-
-.hint a {
-  color: #8ab4f8;
-}
-
 .va-video-wrap video {
   display: block;
   width: 100%;
@@ -1076,42 +984,9 @@ select.iq-cfg-input {
   object-fit: contain;
 }
 
-.mode-fieldset {
-  border: 1px solid #2d333d;
-  border-radius: 8px;
-  padding: 0.55rem 0.6rem;
-  margin: 0 0 0.85rem;
-}
-
-.mode-legend {
-  padding: 0 0.35rem;
-  font-size: 0.8rem;
-  color: #9aa0a6;
-}
-
-.mode-label {
-  display: flex;
-  align-items: baseline;
-  gap: 0.45rem;
-  margin: 0.35rem 0;
-  cursor: pointer;
-}
-
-.mode-num {
-  display: inline-block;
-  min-width: 1.15rem;
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: #8ab4f8;
-  font-variant-numeric: tabular-nums;
-}
-
-.mode-macro {
-  font-family: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: #e8eaed;
-  letter-spacing: 0.02em;
+.mode-select-input {
+  width: 100%;
+  max-width: 100%;
 }
 
 .capturer-progress-stack {  margin-top: 0.5rem;

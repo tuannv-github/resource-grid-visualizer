@@ -10,17 +10,6 @@
     <div id="app" class="rg-app">
       <header class="rg-app__toolbar">
         <h1 class="rg-app__title">Resource grid — live</h1>
-        <details class="rg-app__hint">
-          <summary>Playback &amp; setup hints</summary>
-          <p id="hint" class="hint">
-            In Docker, playback defaults to <strong>LL-HLS</strong> on port 8888 (all TCP, works well on LAN).
-            Low-latency <strong>WHEP</strong>: add <code>?playback=webrtc</code> or
-            <code>VITE_PLAYBACK_MODE=webrtc</code> (needs TCP/UDP 8189 for ICE; from another PC set
-            <code>MTX_WEBRTC_ADDITIONAL_HOSTS</code> in <code>.env</code>). Add <code>?debug=1</code> for console
-            traces. Each stream’s panel links to that backend’s OpenAPI <strong>/docs</strong>. Dual DL/UL: set
-            <code>VITE_API_BASE_DL</code> and <code>VITE_API_BASE_UL</code> (see <code>docker-compose.dlul.yaml</code>).
-          </p>
-        </details>
       </header>
 
       <div class="rg-dashboard">
@@ -32,7 +21,6 @@
                   <div class="va-corner" aria-hidden="true"></div>
                   <div class="va-axis-top">
                     <span class="va-axis-title">Symbol index</span>
-                    <span class="va-axis-hint">increasing →</span>
                   </div>
                   <div class="va-symbol-col" aria-label="PRB index">
                     <div class="va-symbol-ticks" data-role="va-symbol-ticks"></div>
@@ -73,7 +61,6 @@
                   <div class="va-corner" aria-hidden="true"></div>
                   <div class="va-axis-top">
                     <span class="va-axis-title">Symbol index</span>
-                    <span class="va-axis-hint">increasing →</span>
                   </div>
                   <div class="va-symbol-col" aria-label="PRB index">
                     <div class="va-symbol-ticks" data-role="va-symbol-ticks"></div>
@@ -108,7 +95,7 @@
           </section>
         </div>
 
-        <aside class="rg-dashboard__side" aria-label="Status and controls">
+        <aside class="rg-dashboard__side" aria-label="Plotter &amp; Generator objects">
           <section id="panel-dl-controls" class="rg-stream-box" aria-labelledby="dl-stream-heading">
             <header class="rg-stream-box__head rg-panel-headrow">
               <h2 id="dl-stream-heading" class="rg-panel-heading">Downlink</h2>
@@ -118,166 +105,212 @@
               <p data-role="status" class="playback-status">Connecting…</p>
             </header>
 
-            <details class="rg-subexpando" open>
-              <summary class="rg-subexpando__summary">Status</summary>
-              <div class="rg-subexpando__body">
-                <div class="panel-status">
-                  <p class="panel-status-meta">
-                    Live fields from <code>GET /api/stream/status</code>; the UI polls about every 2&nbsp;s.
-                  </p>
-                  <dl class="status-dl">
-                    <dt>API mode</dt>
-                    <dd data-role="pub-mode">—</dd>
-                    <dt>Generating</dt>
-                    <dd data-role="pub-running">—</dd>
-                    <dt>Encoder</dt>
-                    <dd data-role="pub-encoder">—</dd>
-                    <dt>Lavfi source</dt>
-                    <dd data-role="pub-source">—</dd>
-                    <dt>MediaMTX path</dt>
-                    <dd data-role="pub-path">—</dd>
-                    <dt>Plotter status</dt>
-                    <dd data-role="pub-plotter">Stopped</dd>
-                    <dt>Generator status</dt>
-                    <dd data-role="pub-generator">—</dd>
-                    <dt>Generator FPS</dt>
-                    <dd data-role="pub-iq-producer-fps">—</dd>
-                    <dt>Pipeline output (Hz)</dt>
-                    <dd data-role="pub-pipeline-stages" class="panel-status-pipeline">—</dd>
-                    <div data-role="iq-pattern-status-row" class="status-dl-group" hidden>
-                      <dt>IQ pattern</dt>
-                      <dd data-role="pub-iq-pattern">—</dd>
-                    </div>
-                    <dt>Encoder output FPS</dt>
-                    <dd data-role="pub-out-fps">—</dd>
-                    <dt>Published frames</dt>
-                    <dd data-role="pub-frames">—</dd>
-                  </dl>
-                </div>
-              </div>
-            </details>
+            <article
+              class="rg-object rg-object--plotter"
+              data-role="object-plotter"
+              aria-labelledby="dl-object-plotter-title"
+            >
+              <header class="rg-object__head">
+                <h3 id="dl-object-plotter-title" class="rg-object__title">Plotter</h3>
+              </header>
 
-            <details class="rg-subexpando" open>
-              <summary class="rg-subexpando__summary">Configuration</summary>
-              <div class="rg-subexpando__body">
-                <fieldset class="mode-fieldset" data-role="publisher-mode-fieldset">
-                  <legend class="mode-legend">Publisher mode</legend>
-                </fieldset>
-                <div class="iq-cfg" data-role="iq-generator-fps-wrap" hidden>
-                  <label class="iq-cfg-label"
-                    >Generator FPS
-                    <div class="iq-cfg-row">
+              <details class="rg-subexpando" open>
+                <summary class="rg-subexpando__summary">Configuration</summary>
+                <div class="rg-subexpando__body">
+                  <div class="iq-cfg">
+                    <label class="iq-cfg-label plotter-encoder-fps-label"
+                      >Encoder FPS (start)
                       <input
                         type="number"
-                        data-role="iq-generator-fps"
+                        data-role="plotter-encoder-fps"
                         class="iq-cfg-input"
                         min="1"
-                        max="600"
+                        max="50"
                         step="1"
-                        value="200"
+                        value="24"
+                        inputmode="numeric"
+                        title="Encoder output FPS for plotter start (default 24; matches server CUDA_IQ_FPS). Sent as encoder_fps."
+                        aria-label="Encoder output FPS for plotter start"
                       />
-                      <button type="button" data-role="btn-iq-generator-fps-apply" class="btn btn-secondary">
-                        Apply
+                    </label>
+                  </div>
+                </div>
+              </details>
+
+              <details class="rg-subexpando" open>
+                <summary class="rg-subexpando__summary">Control</summary>
+                <div class="rg-subexpando__body">
+                  <div
+                    class="control-group"
+                    data-role="plotter-control-group"
+                    aria-labelledby="plotter-group-title-dl"
+                  >
+                    <h4 class="control-group-title" id="plotter-group-title-dl">Plotter (CUDA)</h4>
+                    <div class="toolbar">
+                      <button type="button" data-role="btn-plotter-start" class="btn btn-primary">
+                        Start plotter
+                      </button>
+                      <button type="button" data-role="btn-plotter-stop" class="btn btn-danger" disabled>
+                        Stop plotter
                       </button>
                     </div>
-                  </label>
-                </div>
-                <div class="iq-cfg" data-role="iq-pattern-wrap" hidden>
-                  <label class="iq-cfg-label"
-                    >Synthetic IQ pattern
-                    <div class="iq-cfg-row">
-                      <select data-role="iq-pattern-select" class="iq-cfg-input" aria-label="IQ pattern"></select>
-                      <button type="button" data-role="btn-iq-pattern-apply" class="btn btn-secondary">Apply</button>
+                  </div>
+
+                  <div
+                    class="control-group"
+                    data-role="capturer-panel"
+                    hidden
+                    aria-labelledby="capturer-title-dl"
+                  >
+                    <h4 class="control-group-title" id="capturer-title-dl">File capturer (JPEG)</h4>
+                    <label class="iq-cfg-label"
+                      >Frame count
+                      <input
+                        type="number"
+                        data-role="capturer-frames"
+                        class="iq-cfg-input"
+                        min="1"
+                        max="50000"
+                        value="2000"
+                      />
+                    </label>
+                    <div class="toolbar">
+                      <button type="button" data-role="btn-capturer-start" class="btn btn-secondary">
+                        Capture to files
+                      </button>
+                      <button type="button" data-role="btn-capturer-stop" class="btn btn-secondary" disabled>
+                        Stop capture
+                      </button>
                     </div>
-                  </label>
-                </div>
-              </div>
-            </details>
-
-            <details class="rg-subexpando" open>
-              <summary class="rg-subexpando__summary">Controls</summary>
-              <div class="rg-subexpando__body">
-                <div
-                  class="control-group"
-                  data-role="plotter-control-group"
-                  aria-labelledby="plotter-group-title-dl"
-                >
-                  <h3 class="control-group-title" id="plotter-group-title-dl">Plotter</h3>
-                  <div class="toolbar">
-                    <button type="button" data-role="btn-plotter-start" class="btn btn-primary">Start plotter</button>
-                    <button type="button" data-role="btn-plotter-stop" class="btn btn-danger" disabled>
-                      Stop plotter
-                    </button>
+                    <div class="capturer-progress-stack" hidden data-role="capturer-progress-wrap">
+                      <label class="capturer-progress-label">On disk (JPEG)</label>
+                      <progress
+                        data-role="capturer-progress-written"
+                        class="capturer-progress"
+                        max="1"
+                        value="0"
+                      ></progress>
+                      <label class="capturer-progress-label">In-flight (not on disk)</label>
+                      <progress
+                        data-role="capturer-progress-inflight"
+                        class="capturer-progress"
+                        max="1"
+                        value="0"
+                      ></progress>
+                    </div>
+                    <p data-role="capturer-status" class="capturer-status" aria-live="polite"></p>
                   </div>
                 </div>
+              </details>
 
-                <div
-                  class="control-group"
-                  data-role="capturer-panel"
-                  hidden
-                  aria-labelledby="capturer-title-dl"
-                >
-                  <h3 class="control-group-title" id="capturer-title-dl">File capturer (JPEG)</h3>
-                  <label class="iq-cfg-label"
-                    >Frame count
-                    <input
-                      type="number"
-                      data-role="capturer-frames"
-                      class="iq-cfg-input"
-                      min="1"
-                      max="50000"
-                      value="2000"
-                    />
-                  </label>
-                  <div class="toolbar">
-                    <button type="button" data-role="btn-capturer-start" class="btn btn-secondary">
-                      Capture to files
-                    </button>
-                    <button type="button" data-role="btn-capturer-stop" class="btn btn-secondary" disabled>
-                      Stop capture
-                    </button>
+              <details class="rg-subexpando" open>
+                <summary class="rg-subexpando__summary">Status</summary>
+                <div class="rg-subexpando__body">
+                  <div class="panel-status">
+                    <dl class="status-dl">
+                      <dt>MediaMTX path</dt>
+                      <dd data-role="pub-path">—</dd>
+                      <dt>Publishing</dt>
+                      <dd data-role="pub-publishing">—</dd>
+                      <dt>Plotter (CUDA)</dt>
+                      <dd data-role="pub-cuda-plotter-status">Stopped</dd>
+                      <dt class="status-dl-plotter-extra">Assembly → Raster input</dt>
+                      <dd class="status-dl-plotter-extra" data-role="pub-pipeline-asm">—</dd>
+                      <dt class="status-dl-plotter-extra">Raster → Encoder input</dt>
+                      <dd class="status-dl-plotter-extra" data-role="pub-pipeline-rast">—</dd>
+                      <dt class="status-dl-plotter-extra">Encoder → RTSP / viewer</dt>
+                      <dd class="status-dl-plotter-extra" data-role="pub-pipeline-enc">—</dd>
+                      <dt class="status-dl-plotter-extra">Published frames</dt>
+                      <dd class="status-dl-plotter-extra" data-role="pub-frames">—</dd>
+                    </dl>
                   </div>
-                  <div class="capturer-progress-stack" hidden data-role="capturer-progress-wrap">
-                    <label class="capturer-progress-label">On disk (JPEG)</label>
-                    <progress
-                      data-role="capturer-progress-written"
-                      class="capturer-progress"
-                      max="1"
-                      value="0"
-                    ></progress>
-                    <label class="capturer-progress-label">In-flight (not on disk)</label>
-                    <progress
-                      data-role="capturer-progress-inflight"
-                      class="capturer-progress"
-                      max="1"
-                      value="0"
-                    ></progress>
-                  </div>
-                  <p data-role="capturer-status" class="capturer-status" aria-live="polite"></p>
                 </div>
+              </details>
+            </article>
 
-                <div
-                  class="control-group"
-                  data-role="generator-control-group"
-                  hidden
-                  aria-labelledby="generator-group-title-dl"
-                >
-                  <h3 class="control-group-title" id="generator-group-title-dl">Generator</h3>
-                  <div class="toolbar">
-                    <button type="button" data-role="btn-generator-start" class="btn btn-secondary">
+            <article
+              class="rg-object rg-object--generator"
+              data-role="object-generator"
+              aria-labelledby="dl-object-generator-title"
+            >
+              <header class="rg-object__head">
+                <h3 id="dl-object-generator-title" class="rg-object__title">Generator</h3>
+              </header>
+
+              <details class="rg-subexpando" open>
+                <summary class="rg-subexpando__summary">Configuration</summary>
+                <div class="rg-subexpando__body">
+                  <div class="iq-cfg" data-role="mode-fieldset"></div>
+                  <div class="iq-cfg video-gen-source-row" data-role="synthetic-images-lavfi-wrap">
+                    <label class="iq-cfg-label"
+                      >Pattern
+                      <select data-role="synthetic-images-lavfi-source" class="iq-cfg-input" aria-label="Pattern"></select>
+                    </label>
+                  </div>
+                  <div class="iq-cfg" data-role="generator-resource-grid-fps-wrap" hidden>
+                    <label class="iq-cfg-label"
+                      >Generator FPS
+                      <div class="iq-cfg-row">
+                        <input
+                          type="number"
+                          data-role="generator-resource-grid-fps"
+                          class="iq-cfg-input"
+                          min="1"
+                          max="600"
+                          step="1"
+                          value="200"
+                        />
+                        <button type="button" data-role="btn-generator-resource-grid-fps-apply" class="btn btn-secondary">
+                          Apply
+                        </button>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+              </details>
+
+              <details class="rg-subexpando" open>
+                <summary class="rg-subexpando__summary">Control</summary>
+                <div class="rg-subexpando__body">
+                  <div class="toolbar" data-role="generator-toolbar" role="group" aria-label="Generator">
+                    <button type="button" data-role="btn-generator-start" class="btn btn-primary">
                       Start generator
                     </button>
-                    <button type="button" data-role="btn-generator-stop" class="btn btn-secondary" disabled>
+                    <button type="button" data-role="btn-generator-stop" class="btn btn-danger" disabled>
                       Stop generator
                     </button>
                   </div>
                 </div>
+              </details>
 
-              </div>
-            </details>
+              <details class="rg-subexpando" open>
+                <summary class="rg-subexpando__summary">Status</summary>
+                <div class="rg-subexpando__body">
+                  <div class="panel-status">
+                    <dl class="status-dl">
+                      <dt>Named pipe (UI mode)</dt>
+                      <dd data-role="pub-mode-fifo-path">—</dd>
+                      <div class="status-dl-group" data-role="status-row-iq-feed-pub">
+                        <dt>FAPI / slot writer</dt>
+                        <dd data-role="pub-gen-fapi">—</dd>
+                      </div>
+                      <div class="status-dl-group" data-role="status-row-generator-fps" hidden>
+                        <dt>Generator FPS</dt>
+                        <dd data-role="pub-iq-producer-fps">—</dd>
+                      </div>
+                    </dl>
+                  </div>
+                </div>
+              </details>
+            </article>
           </section>
 
-          <section id="panel-ul-controls" class="rg-stream-box" hidden aria-labelledby="ul-stream-heading">
+          <section
+            id="panel-ul-controls"
+            class="rg-stream-box"
+            hidden
+            aria-labelledby="ul-stream-heading"
+          >
             <header class="rg-stream-box__head rg-panel-headrow">
               <h2 id="ul-stream-heading" class="rg-panel-heading">Uplink</h2>
               <p class="rg-panel-meta">
@@ -286,163 +319,204 @@
               <p data-role="status" class="playback-status">Connecting…</p>
             </header>
 
-            <details class="rg-subexpando" open>
-              <summary class="rg-subexpando__summary">Status</summary>
-              <div class="rg-subexpando__body">
-                <div class="panel-status">
-                  <p class="panel-status-meta">
-                    Live fields from <code>GET /api/stream/status</code>; the UI polls about every 2&nbsp;s.
-                  </p>
-                  <dl class="status-dl">
-                    <dt>API mode</dt>
-                    <dd data-role="pub-mode">—</dd>
-                    <dt>Generating</dt>
-                    <dd data-role="pub-running">—</dd>
-                    <dt>Encoder</dt>
-                    <dd data-role="pub-encoder">—</dd>
-                    <dt>Lavfi source</dt>
-                    <dd data-role="pub-source">—</dd>
-                    <dt>MediaMTX path</dt>
-                    <dd data-role="pub-path">—</dd>
-                    <dt>Plotter status</dt>
-                    <dd data-role="pub-plotter">Stopped</dd>
-                    <dt>Generator status</dt>
-                    <dd data-role="pub-generator">—</dd>
-                    <dt>Generator FPS</dt>
-                    <dd data-role="pub-iq-producer-fps">—</dd>
-                    <dt>Pipeline output (Hz)</dt>
-                    <dd data-role="pub-pipeline-stages" class="panel-status-pipeline">—</dd>
-                    <div data-role="iq-pattern-status-row" class="status-dl-group" hidden>
-                      <dt>IQ pattern</dt>
-                      <dd data-role="pub-iq-pattern">—</dd>
-                    </div>
-                    <dt>Encoder output FPS</dt>
-                    <dd data-role="pub-out-fps">—</dd>
-                    <dt>Published frames</dt>
-                    <dd data-role="pub-frames">—</dd>
-                  </dl>
-                </div>
-              </div>
-            </details>
+            <article
+              class="rg-object rg-object--plotter"
+              data-role="object-plotter"
+              aria-labelledby="ul-object-plotter-title"
+            >
+              <header class="rg-object__head">
+                <h3 id="ul-object-plotter-title" class="rg-object__title">Plotter</h3>
+              </header>
 
-            <details class="rg-subexpando" open>
-              <summary class="rg-subexpando__summary">Configuration</summary>
-              <div class="rg-subexpando__body">
-                <fieldset class="mode-fieldset" data-role="publisher-mode-fieldset">
-                  <legend class="mode-legend">Publisher mode</legend>
-                </fieldset>
-                <div class="iq-cfg" data-role="iq-generator-fps-wrap" hidden>
-                  <label class="iq-cfg-label"
-                    >Generator FPS
-                    <div class="iq-cfg-row">
+              <details class="rg-subexpando" open>
+                <summary class="rg-subexpando__summary">Configuration</summary>
+                <div class="rg-subexpando__body">
+                  <div class="iq-cfg">
+                    <label class="iq-cfg-label plotter-encoder-fps-label"
+                      >Encoder FPS (start)
                       <input
                         type="number"
-                        data-role="iq-generator-fps"
+                        data-role="plotter-encoder-fps"
                         class="iq-cfg-input"
                         min="1"
-                        max="600"
+                        max="50"
                         step="1"
-                        value="200"
+                        value="24"
+                        inputmode="numeric"
+                        title="Encoder output FPS for plotter start (default 24; matches server CUDA_IQ_FPS). Sent as encoder_fps."
+                        aria-label="Encoder output FPS for plotter start"
                       />
-                      <button type="button" data-role="btn-iq-generator-fps-apply" class="btn btn-secondary">
-                        Apply
+                    </label>
+                  </div>
+                </div>
+              </details>
+
+              <details class="rg-subexpando" open>
+                <summary class="rg-subexpando__summary">Control</summary>
+                <div class="rg-subexpando__body">
+                  <div
+                    class="control-group"
+                    data-role="plotter-control-group"
+                    aria-labelledby="plotter-group-title-ul"
+                  >
+                    <h4 class="control-group-title" id="plotter-group-title-ul">Plotter (CUDA)</h4>
+                    <div class="toolbar">
+                      <button type="button" data-role="btn-plotter-start" class="btn btn-primary">
+                        Start plotter
+                      </button>
+                      <button type="button" data-role="btn-plotter-stop" class="btn btn-danger" disabled>
+                        Stop plotter
                       </button>
                     </div>
-                  </label>
-                </div>
-                <div class="iq-cfg" data-role="iq-pattern-wrap" hidden>
-                  <label class="iq-cfg-label"
-                    >Synthetic IQ pattern
-                    <div class="iq-cfg-row">
-                      <select data-role="iq-pattern-select" class="iq-cfg-input" aria-label="IQ pattern"></select>
-                      <button type="button" data-role="btn-iq-pattern-apply" class="btn btn-secondary">Apply</button>
+                  </div>
+
+                  <div
+                    class="control-group"
+                    data-role="capturer-panel"
+                    hidden
+                    aria-labelledby="capturer-title-ul"
+                  >
+                    <h4 class="control-group-title" id="capturer-title-ul">File capturer (JPEG)</h4>
+                    <label class="iq-cfg-label"
+                      >Frame count
+                      <input
+                        type="number"
+                        data-role="capturer-frames"
+                        class="iq-cfg-input"
+                        min="1"
+                        max="50000"
+                        value="2000"
+                      />
+                    </label>
+                    <div class="toolbar">
+                      <button type="button" data-role="btn-capturer-start" class="btn btn-secondary">
+                        Capture to files
+                      </button>
+                      <button type="button" data-role="btn-capturer-stop" class="btn btn-secondary" disabled>
+                        Stop capture
+                      </button>
                     </div>
-                  </label>
-                </div>
-              </div>
-            </details>
-
-            <details class="rg-subexpando" open>
-              <summary class="rg-subexpando__summary">Controls</summary>
-              <div class="rg-subexpando__body">
-                <div
-                  class="control-group"
-                  data-role="plotter-control-group"
-                  aria-labelledby="plotter-group-title-ul"
-                >
-                  <h3 class="control-group-title" id="plotter-group-title-ul">Plotter</h3>
-                  <div class="toolbar">
-                    <button type="button" data-role="btn-plotter-start" class="btn btn-primary">Start plotter</button>
-                    <button type="button" data-role="btn-plotter-stop" class="btn btn-danger" disabled>
-                      Stop plotter
-                    </button>
+                    <div class="capturer-progress-stack" hidden data-role="capturer-progress-wrap">
+                      <label class="capturer-progress-label">On disk (JPEG)</label>
+                      <progress
+                        data-role="capturer-progress-written"
+                        class="capturer-progress"
+                        max="1"
+                        value="0"
+                      ></progress>
+                      <label class="capturer-progress-label">In-flight (not on disk)</label>
+                      <progress
+                        data-role="capturer-progress-inflight"
+                        class="capturer-progress"
+                        max="1"
+                        value="0"
+                      ></progress>
+                    </div>
+                    <p data-role="capturer-status" class="capturer-status" aria-live="polite"></p>
                   </div>
                 </div>
+              </details>
 
-                <div
-                  class="control-group"
-                  data-role="capturer-panel"
-                  hidden
-                  aria-labelledby="capturer-title-ul"
-                >
-                  <h3 class="control-group-title" id="capturer-title-ul">File capturer (JPEG)</h3>
-                  <label class="iq-cfg-label"
-                    >Frame count
-                    <input
-                      type="number"
-                      data-role="capturer-frames"
-                      class="iq-cfg-input"
-                      min="1"
-                      max="50000"
-                      value="2000"
-                    />
-                  </label>
-                  <div class="toolbar">
-                    <button type="button" data-role="btn-capturer-start" class="btn btn-secondary">
-                      Capture to files
-                    </button>
-                    <button type="button" data-role="btn-capturer-stop" class="btn btn-secondary" disabled>
-                      Stop capture
-                    </button>
+              <details class="rg-subexpando" open>
+                <summary class="rg-subexpando__summary">Status</summary>
+                <div class="rg-subexpando__body">
+                  <div class="panel-status">
+                    <dl class="status-dl">
+                      <dt>MediaMTX path</dt>
+                      <dd data-role="pub-path">—</dd>
+                      <dt>Publishing</dt>
+                      <dd data-role="pub-publishing">—</dd>
+                      <dt>Plotter (CUDA)</dt>
+                      <dd data-role="pub-cuda-plotter-status">Stopped</dd>
+                      <dt class="status-dl-plotter-extra">Assembly → Raster input</dt>
+                      <dd class="status-dl-plotter-extra" data-role="pub-pipeline-asm">—</dd>
+                      <dt class="status-dl-plotter-extra">Raster → Encoder input</dt>
+                      <dd class="status-dl-plotter-extra" data-role="pub-pipeline-rast">—</dd>
+                      <dt class="status-dl-plotter-extra">Encoder → RTSP / viewer</dt>
+                      <dd class="status-dl-plotter-extra" data-role="pub-pipeline-enc">—</dd>
+                      <dt class="status-dl-plotter-extra">Published frames</dt>
+                      <dd class="status-dl-plotter-extra" data-role="pub-frames">—</dd>
+                    </dl>
                   </div>
-                  <div class="capturer-progress-stack" hidden data-role="capturer-progress-wrap">
-                    <label class="capturer-progress-label">On disk (JPEG)</label>
-                    <progress
-                      data-role="capturer-progress-written"
-                      class="capturer-progress"
-                      max="1"
-                      value="0"
-                    ></progress>
-                    <label class="capturer-progress-label">In-flight (not on disk)</label>
-                    <progress
-                      data-role="capturer-progress-inflight"
-                      class="capturer-progress"
-                      max="1"
-                      value="0"
-                    ></progress>
-                  </div>
-                  <p data-role="capturer-status" class="capturer-status" aria-live="polite"></p>
                 </div>
+              </details>
+            </article>
 
-                <div
-                  class="control-group"
-                  data-role="generator-control-group"
-                  hidden
-                  aria-labelledby="generator-group-title-ul"
-                >
-                  <h3 class="control-group-title" id="generator-group-title-ul">Generator</h3>
-                  <div class="toolbar">
-                    <button type="button" data-role="btn-generator-start" class="btn btn-secondary">
+            <article
+              class="rg-object rg-object--generator"
+              data-role="object-generator"
+              aria-labelledby="ul-object-generator-title"
+            >
+              <header class="rg-object__head">
+                <h3 id="ul-object-generator-title" class="rg-object__title">Generator</h3>
+              </header>
+
+              <details class="rg-subexpando" open>
+                <summary class="rg-subexpando__summary">Configuration</summary>
+                <div class="rg-subexpando__body">
+                  <div class="iq-cfg" data-role="mode-fieldset"></div>
+                  <div class="iq-cfg video-gen-source-row" data-role="synthetic-images-lavfi-wrap">
+                    <label class="iq-cfg-label"
+                      >Pattern
+                      <select data-role="synthetic-images-lavfi-source" class="iq-cfg-input" aria-label="Pattern"></select>
+                    </label>
+                  </div>
+                  <div class="iq-cfg" data-role="generator-resource-grid-fps-wrap" hidden>
+                    <label class="iq-cfg-label"
+                      >Generator FPS
+                      <div class="iq-cfg-row">
+                        <input
+                          type="number"
+                          data-role="generator-resource-grid-fps"
+                          class="iq-cfg-input"
+                          min="1"
+                          max="600"
+                          step="1"
+                          value="200"
+                        />
+                        <button type="button" data-role="btn-generator-resource-grid-fps-apply" class="btn btn-secondary">
+                          Apply
+                        </button>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+              </details>
+
+              <details class="rg-subexpando" open>
+                <summary class="rg-subexpando__summary">Control</summary>
+                <div class="rg-subexpando__body">
+                  <div class="toolbar" data-role="generator-toolbar" role="group" aria-label="Generator">
+                    <button type="button" data-role="btn-generator-start" class="btn btn-primary">
                       Start generator
                     </button>
-                    <button type="button" data-role="btn-generator-stop" class="btn btn-secondary" disabled>
+                    <button type="button" data-role="btn-generator-stop" class="btn btn-danger" disabled>
                       Stop generator
                     </button>
                   </div>
                 </div>
+              </details>
 
-              </div>
-            </details>
+              <details class="rg-subexpando" open>
+                <summary class="rg-subexpando__summary">Status</summary>
+                <div class="rg-subexpando__body">
+                  <div class="panel-status">
+                    <dl class="status-dl">
+                      <dt>Named pipe (UI mode)</dt>
+                      <dd data-role="pub-mode-fifo-path">—</dd>
+                      <div class="status-dl-group" data-role="status-row-iq-feed-pub">
+                        <dt>FAPI / slot writer</dt>
+                        <dd data-role="pub-gen-fapi">—</dd>
+                      </div>
+                      <div class="status-dl-group" data-role="status-row-generator-fps" hidden>
+                        <dt>Generator FPS</dt>
+                        <dd data-role="pub-iq-producer-fps">—</dd>
+                      </div>
+                    </dl>
+                  </div>
+                </div>
+              </details>
+            </article>
           </section>
         </aside>
       </div>

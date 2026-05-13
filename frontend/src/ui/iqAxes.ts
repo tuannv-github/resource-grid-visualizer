@@ -30,7 +30,7 @@ export function renderIqAxes(
   }
   symFoot.replaceChildren();
   symFoot.style.gridTemplateColumns = `repeat(${symbolColumnCount}, minmax(0, 1fr))`;
-  symFoot.setAttribute("aria-label", `Symbol index ${0} through ${lastSymbolIdx}`);
+  symFoot.setAttribute("aria-label", `Symbol index 0 through ${lastSymbolIdx}`);
   for (let symIdx = 0; symIdx < symbolColumnCount; symIdx++) {
     const span = document.createElement("span");
     span.textContent = String(symIdx);

@@ -9,6 +9,8 @@ declare class MediaMTXWebRTCReader {
     onError?: (err: string) => void;
     onTrack?: (evt: RTCTrackEvent) => void;
     onDataChannel?: (evt: RTCDataChannelEvent) => void;
+    /** When true, negotiate recvonly audio as well (default off: video-only WHEP). */
+    whepIncludeAudio?: boolean;
     /** From main.ts when ?debug=1 or VITE_DEBUG=1 */
     debugLog?: (...args: unknown[]) => void;
   });
@@ -25,7 +27,7 @@ interface ImportMetaEnv {
   /** Dev only: Vite proxy target for `/api`, `/docs`, `/openapi.json`, `/redoc` (e.g. `http://backend:8081` in Docker Compose). */
   readonly VITE_DEV_PROXY_TARGET?: string;
   readonly VITE_API_BASE?: string;
-  /** When both DL and UL are set, the UI shows two columns (docker-compose.dlul.yaml). */
+  /** When both DL and UL are set, the UI shows two columns (compose/docker-compose.dlul.yaml). */
   readonly VITE_API_BASE_DL?: string;
   readonly VITE_API_BASE_UL?: string;
   /** Force single-column UI (one `ResgridPanel`) even if both API bases are set. Values: 1, true, yes, on. */
@@ -34,6 +36,10 @@ interface ImportMetaEnv {
   readonly VITE_GUI_DLUL?: string;
   readonly VITE_HLS_URL?: string;
   readonly VITE_PLAYBACK_MODE?: string;
+  /** When "0", skip `hardReconnectPlayback` (see `playbackAutoreconnect.ts`). */
+  readonly VITE_PLAYBACK_AUTORECONNECT?: string;
+  /** When "1", WHEP offer includes recvonly audio (try if video-only never decodes with your publisher). */
+  readonly VITE_WHEP_INCLUDE_AUDIO?: string;
   /** Set to "1" to log connectivity / WebRTC diagnostics (or use ?debug=1). */
   readonly VITE_DEBUG?: string;
 }

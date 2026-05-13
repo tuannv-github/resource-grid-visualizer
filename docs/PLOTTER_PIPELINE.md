@@ -1,6 +1,6 @@
 # `resgrid_plotter` — processing pipeline
 
-This document describes the **end-to-end data path** inside **`resgrid_plotter`** (sources: `backend/resouce-grid-plotter/src/plotter_{management,assembly,raster,encode}.cu` and `include/plotter_common.cuh`): how grids are produced or ingested, how they become RGBA, how frames are selected for NVENC, and how the FFmpeg child is configured.
+This document describes the **end-to-end data path** inside **`resgrid_plotter`** (sources: `backend/plotter/src/plotter_{management,assembly,raster,encode}.cu` and `include/plotter_common.cuh`): how grids are produced or ingested, how they become RGBA, how frames are selected for NVENC, and how the FFmpeg child is configured.
 
 **Related docs:** stack roles and env in [`ARCHITECTURE.md`](ARCHITECTURE.md); slot FIFO wire format and **`slot_id`** semantics in [`CHANNEL_BASED_INTERFACE.md`](CHANNEL_BASED_INTERFACE.md).
 
@@ -8,7 +8,7 @@ This document describes the **end-to-end data path** inside **`resgrid_plotter`*
 
 ## 0. Target architecture: Assembly, Raster, Encode (design)
 
-This section names the three concerns: **Assembly** (complete **`GridFrame`** per slot or full-grid tick), **Raster** (grid → RGBA + overlays), **Encode** (RGBA stream → NVENC/RTSP with **`--encode-policy`**). The split sources implement **Raster** on a **background thread** (**`raster_stage_main`** in **`plotter_raster.cu`**) and **Encode** on the **main thread** (**`plotter_management.cu`**), with a **`RgbaFrameQueue`** between them; **Assembly** runs in **`plotter_assembly.cu`** threads plus **`acquire_frame_for_interpolate`** inside **Raster**.
+This section names the pipeline stages: **Assembler** (complete **`GridFrame`** per slot or full-grid tick), **Raster** (grid → RGBA + overlays), **Encoder** (RGBA stream → NVENC/RTSP with **`--encode-policy`**). **Raster** runs on a **background thread** (`RasterStage::raster_run` in **`plotter_raster.cu`**); **Encoder** workers run alongside the main join order in **`plotter_pipeline.cu`**, with a **`RgbaFrameQueue`** between them; **Assembler** runs in **`plotter_assembler.cu`** threads plus **`acquire_frame_for_interpolate`** inside **Raster**.
 
 ### 0.1 Assembly (resource grid assembly)
 
@@ -21,7 +21,7 @@ This section names the three concerns: **Assembly** (complete **`GridFrame`** pe
 
 **Non–slot-message paths (modes 1 and 2):** Treat each **already-complete** grid (internal synthetic tick, or one **full-grid IQ FIFO** read) as a **degenerate** “slot completion” of one message → one **`GridFrame`** pushed onto the **same** completed-slot queue *or* a parallel **full-grid queue** that **Raster** merges with the same code path (implementation choice).
 
-**Sidecar IQ (`--iq-fifo` in mode 3):** **Assembly** still owns **`chan` / RNTI`** for slot-derived grids; sidecar items remain **I/Q-only** updates. **Raster** can combine “last completed slot metadata + sidecar **`iq`**” before CUDA (same semantics as today’s **`pop_merged_assembled_or_sidecar_iq`**).
+**Sidecar IQ (`--fifo-resource-grid` in mode 3):** **Assembly** still owns **`chan` / RNTI`** for slot-derived grids; sidecar items remain **I/Q-only** updates. **Raster** can combine “last completed slot metadata + sidecar **`iq`**” before CUDA (same semantics as today’s **`pop_merged_assembled_or_sidecar_iq`**).
 
 ### 0.2 Raster (grid → image)
 
@@ -69,7 +69,7 @@ flowchart LR
 
 ### 0.5 Implementation status
 
-**Today (split `plotter_*.cu`):** **Assembly** — **`slot_message_assembler_main`**, **`external_grid_frame_reader_main`**, **`run_internal_synthetic_producer_loop`** → **`GridFrame`** queues (**`AssembledSlotQueue`**, **`GridFrameQueue`**). **Raster** — thread **`raster_stage_main`** (or pool): **`acquire_frame_for_interpolate`** (merged slot / sidecar), **`render_frame_rgba`**, then **`RgbaFrameQueue::push`**. **Encode** — **`main`** thread: drain **`RgbaFrameQueue`**, apply **`--encode-policy`**, **`write_rgba_to_ffmpeg`**. Bounded queues use **drop-oldest when full** (§6).
+**Today (split `plotter_*.cu`):** **Assembler** — **`slot_message_assembler_main`**, **`external_grid_frame_reader_main`**, **`run_internal_synthetic_producer_loop`** → **`GridFrame`** queues (**`AssembledSlotQueue`**, **`GridFrameQueue`**). **Raster** — **`RasterStage::raster_run`** (single thread or pool): **`acquire_frame_for_interpolate`** (merged slot / sidecar), **`render_frame_rgba`**, then **`RgbaFrameQueue::push`**. **Encoder** — **`EncoderStage`** worker threads: drain **`RgbaFrameQueue`**, apply **`--encode-policy`**, **`write_rgba_to_ffmpeg`**. Bounded queues use **drop-oldest when full** (§6).
 
 ---
 
@@ -134,8 +134,8 @@ At a high level: **one `GridFrame`** (per-cell complex I/Q + optional **`chan`**
 | Mode | FIFOs | Producer / reader |
 |------|--------|-------------------|
 | **1** | None | In-process **`InternalFrameQueue`** filled by **`run_internal_synthetic_producer_loop`** (rate influenced by **`--fps`** and optional **`--cuda-shm`** command bytes). |
-| **2** | **`--iq-fifo`** required | **`external_grid_frame_reader_main`**: each read = one complete **`prb × symbols`** **`float32`** I/Q raster; **`chan`** zero unless slot path also active (not typical for pure mode 2). |
-| **3** | **`--slot-fifo`** required; **`--iq-fifo`** optional | **`slot_message_assembler_main`** builds full grids from slot records → **`AssembledSlotQueue`**. Optional sidecar IQ reader → **`ChannelModeIqSidecarQueue`**. |
+| **2** | **`--fifo-resource-grid`** required | **`external_grid_frame_reader_main`** or **`resource_grid_slot_iq_fifo_reader_main`** on a **dedicated thread in `RasterStage`**, enqueueing into **`FullGridFifoQueue`**; the main raster loop **`acquire_frame_for_interpolate`** consumes that queue. Each full-grid read = one complete **`prb × symbols`** **`float32`** I/Q raster; **`chan`** zero unless slot path also active (not typical for pure mode 2). |
+| **3** | **`--fifo-fapi`** required; **`--fifo-resource-grid`** optional | **`slot_message_assembler_main`** builds full grids from slot records → **`AssembledSlotQueue`**. Optional sidecar IQ reader → **`ChannelModeIqSidecarQueue`**. |
 
 **Acquire priority (mode 3):** **`pop_merged_assembled_or_sidecar_iq`** — try completed **slot** grid first; else try **sidecar IQ**; else short waits on each. Sidecar frames reuse the **last completed slot’s** **`chan` / `cell_rnti`** so the video does not alternate PHY tint vs Viridis when IQ arrives faster than slot boundaries.
 
@@ -146,7 +146,7 @@ At a high level: **one `GridFrame`** (per-cell complex I/Q + optional **`chan`**
 ## 3. Frame acquisition → `GridFrame`
 
 - **`GridFrame`**: **`iq`** (`float2` per cell), **`chan`** (`uint8_t` per cell), **`cell_rnti`** (`uint32_t` per cell, slot path).
-- **Blocking timeouts** on FIFO pops (internal / full-grid paths): **2000 ms** in **`acquire_frame_for_interpolate`** (called from **`raster_stage_main`**) so the **Raster** thread can yield while waiting for grids; **Encode** applies mode-3 idle / encoder timing separately.
+- **Blocking timeouts** on FIFO pops (internal / full-grid paths): **2000 ms** in **`acquire_frame_for_interpolate`** (called from **`RasterStage::raster_run`**) so the **Raster** thread can yield while waiting for grids; **Encoder** applies mode-3 idle / encoder timing separately.
 
 ---
 
@@ -198,7 +198,7 @@ If **`--encoder-fps`** is omitted on the CLI but **`--fps`** was set, **`--encod
 
 - **Raster** produces RGBA whenever a **`GridFrame`** is merged (up to the pipeline rate) and **pushes** copies into **`RgbaFrameQueue`**.
 - **Encode** (**`main`**) **drains** **`try_pop`** bursts between encoder ticks; on each **`1/encoder_fps`** tick it writes the **latest** RGBA dequeued for that interval (**temporal subsampling**, “latest wins”).
-- **Counters:** **`g_stage_output_count_assembly`** +1 when **Assembly** pushes a completed **`GridFrame`** downstream; **`g_stage_output_count_raster`** +1 per **Raster** RGBA frame; **`g_stage_output_count_encoder`** +1 per successful **complete** **`fwrite`** burst to **Encode** (see §8 — stdin writes **loop** until the full RGBA size; partial pipe writes would corrupt **rawvideo**). A dedicated stats thread samples **Δcount/Δt** (~1 s) for SHM/API Hz.
+- **Counters:** **`g_stage_output_count_assembler`** +1 when **Assembler** pushes a completed **`GridFrame`** downstream; **`g_stage_output_count_raster`** +1 per **Raster** RGBA frame; **`g_stage_output_count_encoder`** +1 per successful **complete** **`fwrite`** burst to **Encoder** (see §8 — stdin writes **loop** until the full RGBA size; partial pipe writes would corrupt **rawvideo**). A dedicated stats thread samples **Δcount/Δt** (~1 s) for SHM/API Hz.
 
 ### 7.2 `mean`
 
@@ -241,11 +241,11 @@ The backend allocates a **`384`-byte** POSIX SHM object (`_IQ_CUDA_SHM_BYTES` in
 | **16** | `uint32_t` | Reader of SHM / API | **Synthetic pattern id**; must match backend / generator (**`IQ_PATTERN_*`**). |
 | **24** | `double` | Backend / tooling | **Commanded** producer Hz (clamped **1…600**); internal producer sleeps to this. |
 | **32** | `uint64_t` | Plotter after each **complete** stdin write to FFmpeg | Cumulative **frames published** to NVENC stdin (same as **`g_stage_output_count_encoder`**). |
-| **40** | `double` | Stats thread | **Assembly input** messages/s (slot records, IQ FIFO messages, or internal synthetic ticks). |
-| **48** | `double` | Stats thread | **Assembly output** completed **`GridFrame`**/s pushed to internal queues. |
-| **56** | `double` | Stats thread | **Raster input** (chained): same value as offset **48** — “input to Raster” = **Assembly output** Hz. |
+| **40** | `double` | Stats thread | **Assembler input** messages/s (slot records, IQ FIFO messages, or internal synthetic ticks). |
+| **48** | `double` | Stats thread | **Assembler output** completed **`GridFrame`**/s pushed to internal queues. |
+| **56** | `double` | Stats thread | **Raster input** (chained): same value as offset **48** — “input to Raster” = **Assembler output** Hz. |
 | **64** | `double` | Stats thread | **Raster output** images/s (same rate as offset **8**). |
-| **72** | `double` | Stats thread | **Encoder input** (chained): same value as offset **64** / **8** — “input to Encode” = **Raster output** Hz. |
+| **72** | `double` | Stats thread | **Encoder input** (chained): same value as offset **64** / **8** — “input to Encoder” = **Raster output** Hz. |
 | **80** | `double` | Stats thread | **Encoder output** frames/s (successful **`write_rgba_to_ffmpeg`**). |
 
 The last pipeline **`double`** occupies bytes **80…87**; byte **88** begins the **file capturer** block (§9.2).
@@ -266,7 +266,7 @@ Little-endian **`uint32`** unless noted. Path is **256 bytes** UTF-8 (NUL-padded
 | **368** | 4 | JPEG **worker** thread count. |
 | **372** | 4 | **Stop** flag (backend requests early end). |
 
-**OOM / resilience:** **`std::bad_alloc`** on capturer RGBA copies or **`RgbaFrameQueue`** push clears **`g_run`** (capturer may **`shm_abort`** and join workers) so torn **rawvideo** frames are not emitted; see **`plotter_capturer.cu`** and **`plotter_encode.cu`**.
+**OOM / resilience:** **`std::bad_alloc`** on capturer RGBA copies or **`RgbaFrameQueue`** push clears **`g_run`** (capturer may **`shm_abort`** and join workers) so torn **rawvideo** frames are not emitted; see **`plotter_capturer.cu`** and **`plotter_encoder.cu`**.
 
 ---
 
@@ -281,8 +281,7 @@ Little-endian **`uint32`** unless noted. Path is **256 bytes** UTF-8 (NUL-padded
 | **`--mag-scale`** | Magnitude scaling into colormap. |
 | **`--preset`** | NVENC preset (e.g. **`p4`**). |
 | **`--queue-depth`** | **`GridFrameQueue`** capacity (not slot queue). |
-| **`--data-mode 1\|2\|3`** | Pipeline selection (see section 2). |
-| **`--iq-fifo` / `--slot-fifo`** | Named pipe paths. |
+| **`--fifo-resource-grid` / `--fifo-fapi` / `--fifo-images`** | Named pipe paths; pipeline is inferred from which FIFOs are set (no `--data-mode`). |
 | **`--cuda-shm NAME`** | SHM object name for section 9. |
 | **`--capturer-dir DIR`** | Optional root for **JPEG** still capture (**`frame_*.jpg`**); arms via SHM §9.2 / FastAPI. |
 | **`--no-square` / `--square-letterbox`** | Layout modes. |
@@ -304,8 +303,8 @@ Shared types, queues, SHM helpers, and cross-stage declarations: **`include/plot
 | Concern | Primary file |
 |---------|----------------|
 | Process globals, **`FpsShmMap`**, CLI, **`main()`**, stats thread, encode pacing (last / mean / ffmpeg), shutdown | **`src/plotter_management.cu`** |
-| Slot FIFO assembly, **`active_slot`**, finalize, IQ readers, internal synthetic producer | **`src/plotter_assembly.cu`** |
-| CUDA kernels, overlays, merge/acquire, **`render_frame_rgba`**, **`raster_stage_main`** | **`src/plotter_raster.cu`** |
-| **`spawn_ffmpeg_nvenc_rtsp`**, **`write_rgba_to_ffmpeg`** | **`src/plotter_encode.cu`** |
+| Slot FIFO assembly, **`active_slot`**, finalize, IQ readers, internal synthetic producer | **`src/plotter_assembler.cu`** |
+| CUDA kernels, overlays, merge/acquire, **`render_frame_rgba`**, **`RasterStage::raster_run`** | **`src/plotter_raster.cu`** |
+| **`spawn_ffmpeg_nvenc_rtsp`**, **`write_rgba_to_ffmpeg`** | **`src/plotter_encoder.cu`** |
 | File capturer (**JPEG** queue, SHM §9.2) | **`src/plotter_capturer.cu`** |
 | sRGB linear mean helpers | **`plotter_management.cu`** (used by **`main()`** mean path) |

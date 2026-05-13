@@ -12,8 +12,8 @@ OpenAPI title in code: **MediaMTX stream control**.
 |------|---------|
 | `app/main.py` | FastAPI app, routes, subprocess orchestration, shared-memory IQ controls |
 | `app/log_config.py` | Logging setup (console + optional `LOG_FILE`) |
-| `scripts/resource_grid_generator.py` | Optional Python producer: full-grid I/Q and/or slot messages into FIFOs |
-| `resouce-grid-plotter/` | CUDA/C++ sources for **`resgrid_plotter`** (built in Docker; see below) |
+| `scripts/generator.py` | Optional Python producer: resource-grid I/Q, FAPI/slot messages, and related FIFO feeds |
+| `plotter/` | CUDA/C++ sources for **`resgrid_plotter`** (built in Docker; see below) |
 | `requirements.txt` | Python dependencies |
 | `Dockerfile` | Multi-stage image: CUDA build of `resgrid_plotter` + FFmpeg-NVIDIA runtime + FastAPI |
 
@@ -32,7 +32,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8081
 ```
 
 - **Interactive docs:** [http://127.0.0.1:8081/docs](http://127.0.0.1:8081/docs) (Swagger), [http://127.0.0.1:8081/redoc](http://127.0.0.1:8081/redoc) (ReDoc), [http://127.0.0.1:8081/openapi.json](http://127.0.0.1:8081/openapi.json).
-- **IQ / CUDA paths** expect the **`resgrid_plotter`** binary on `PATH` (see `CUDA_PUBLISHER_BIN`). Without a local CUDA build, use **Docker** (below) or restrict testing to **`SYNTHETIC_VIDEO`** (FFmpeg) if your machine has FFmpeg with the codecs you need.
+- **IQ / CUDA paths** expect the **`resgrid_plotter`** binary on `PATH` (see `CUDA_PUBLISHER_BIN`). Without a local CUDA build, use **Docker** (below) or restrict testing to **`SYNTHETIC_IMAGES`** (FFmpeg) if your machine has FFmpeg with the codecs you need.
 
 ---
 
@@ -58,15 +58,13 @@ The Dockerfile compiles **`resgrid_plotter`** in a CUDA devel stage and copies t
 | Area | Endpoints (representative) |
 |------|----------------------------|
 | Health | `GET /health` |
-| Stream mode | `GET` / `POST /api/stream/mode` |
-| Publisher | `POST /api/stream/start`, `POST /api/stream/stop` |
-| CUDA plotter only | `POST /api/stream/plotter/start`, `POST /api/stream/plotter/stop` |
-| Status | `GET /api/stream/status` (encoder stats, IQ rates, optional capturer fields) |
-| Playback hints | `GET /api/stream/playback` (WHEP / HLS URLs for the UI) |
-| IQ generator (Python FIFO) | `POST /api/stream/generator/start` \| `stop` (aliases under `/api/stream/iq/generator/…`) |
-| IQ FPS / pattern | `GET`/`PUT /api/stream/iq/generator-fps`, `GET /api/stream/iq/patterns`, `PUT /api/stream/iq/pattern` |
-| Channel legend | `GET /api/stream/iq/channel-legend` |
-| Raster → JPEG | `POST /api/stream/plotter/capturer`, `POST /api/stream/plotter/capturer/stop` |
+| Session stop | `POST /api/stop` (FFmpeg + CUDA plotter) |
+| Generator (**generator.py** / FFmpeg) | `GET /api/generator/status`; `POST /api/generator/start` (JSON **`mode`** or **`iq_scope`**); `POST /api/generator/stop` |
+| CUDA plotter | `POST /api/plotter/start`, `POST /api/plotter/stop`, `GET /api/plotter/status` |
+| Playback hints | `GET /api/plotter/playback` (WHEP / HLS URLs for the UI) |
+| IQ FPS / pattern | `GET`/`PUT /api/generator/fps`, `GET /api/generator/patterns`, `PUT /api/generator/pattern` |
+| Channel legend | `GET /api/generator/channel-legend` |
+| Raster → JPEG | `POST /api/plotter/capturer`, `POST /api/plotter/capturer/stop` |
 
 Full request/response schemas and descriptions live in **OpenAPI** (`/docs`).
 
@@ -74,13 +72,13 @@ Full request/response schemas and descriptions live in **OpenAPI** (`/docs`).
 
 ## Environment variables
 
-Behavior is driven by many env vars (MediaMTX host/URL, `STREAM_MODE`, CUDA IQ dimensions, FIFO paths, NVENC preset, CORS, logging, capturer directories, etc.). Authoritative defaults and logic are in **`app/main.py`** (top of file).
+Behavior is driven by many env vars (MediaMTX host/URL, **`GENERATION_MODE`**, CUDA IQ dimensions, FIFO paths, NVENC preset, CORS, logging, capturer directories, etc.). Authoritative defaults and logic are in **`app/main.py`** (top of file).
 
 **High-signal examples:**
 
 - **`MTX_RTSP_URL`** — RTSP publish URL (default `rtsp://mediamtx:8554/live`).
-- **`STREAM_MODE`** / mode API — `SYNTHETIC_VIDEO`, `SYNTHETIC_IQ`, or `SYNTHETIC_CHANNEL_BASED` (slot-message path).
-- **`AUTO_START`** — `1` to start the publisher on boot (compose often sets this for dev).
+- **`GENERATION_MODE`** — `SYNTHETIC_IMAGES`, `SYNTHETIC_RESOURCE_GRID`, or `SYNTHETIC_FAPI` (process default at startup); **`POST /api/generator/start`** JSON **`mode`** selects the synthetic **generator.py** feed when you use that branch.
+- **`AUTO_START`** — `1` to start the publisher on boot; **`compose/`** stacks default **`AUTO_START=0`** (idle until Start / **POST /api/generator/start** or **POST /api/plotter/start**).
 - **`CUDA_*`** — plotter cadence, PRB/symbol counts, FIFO toggles, optional Python generator autostart.
 - **`CORS_ORIGINS`**, **`CORS_ORIGIN_REGEX`** — browser access to the API from the Vite dev server or deployed UI.
 - **`LOG_FILE`**, **`LOG_LEVEL`** — file logging under `logs/` by default.

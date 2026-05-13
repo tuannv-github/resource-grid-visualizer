@@ -18,7 +18,10 @@ webrtcHandshakeTimeout: 30s
 
 webrtcIPsFromInterfaces: true
 
-# Used by docker-compose.dlul.yaml: DL backend publishes to live_dl, UL to live_ul.
+pathDefaults:
+  source: publisher
+
+# Used by compose/docker-compose.dlul.yaml: DL backend publishes to live_dl, UL to live_ul.
 paths:
   live_dl:
   live_ul:

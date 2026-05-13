@@ -1,3 +1,4 @@
+import { isPlaybackDebugEnabled } from "../config/debug";
 import { resolvePanels } from "../config/panelLayout";
 import { ResgridPanel } from "../panel/ResgridPanel";
 
@@ -29,7 +30,7 @@ export function bootApp(): void {
     const panel = new ResgridPanel(mediaRoot as HTMLElement, {
       apiBase: spec.apiBase,
       playbackPath: spec.playbackPath,
-      streamRadioName: spec.streamRadioName,
+      modeSelectId: spec.modeSelectId,
       controlsRoot: controlsRoot as HTMLElement,
     });
     panel.start();
@@ -39,14 +40,16 @@ export function bootApp(): void {
   console.info(
     "[resgrid] App loaded. “Unchecked runtime.lastError…” is from a browser extension, not MediaMTX.",
   );
-  console.info(
-    "[resgrid] Verbose traces: add ?debug=1 to the URL, filter console by “resgrid”. layout =",
-    cfg.layoutMode,
-    "| dual =",
-    cfg.dual,
-    "| panels =",
-    cfg.panels.map((p) => `${p.id}→${p.apiBase}`).join(", "),
-  );
+  if (isPlaybackDebugEnabled()) {
+    console.info(
+      "[resgrid] Verbose traces: add ?debug=1 to the URL, filter console by “resgrid”. layout =",
+      cfg.layoutMode,
+      "| dual =",
+      cfg.dual,
+      "| panels =",
+      cfg.panels.map((p) => `${p.id}→${p.apiBase}`).join(", "),
+    );
+  }
 
   window.addEventListener("beforeunload", () => {
     for (const p of livePanels) p.destroy();

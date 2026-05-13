@@ -12,12 +12,12 @@ Video and HLS/WebRTC traffic go **directly** to MediaMTX from the browser; only 
 |------|---------|
 | `src/app/boot.ts` | Resolves panel layout, mounts **`ResgridPanel`** instances, `beforeunload` cleanup |
 | `src/panel/ResgridPanel.ts` | Per-column UI: playback, status polling, mode radios, IQ controls, capturer actions |
-| `src/api/resgridApi.ts` | Typed `fetch()` wrappers for stream status, IQ pattern/FPS, start/stop, capturer, generator |
-| `src/playback/streamPlayback.ts` | HLS vs WHEP wiring, playback URLs from **`GET /api/stream/playback`** |
+| `src/api/resgridApi.ts` | Typed `fetch()` wrappers for stream status, generator FPS, start/stop, capturer, generator |
+| `src/playback/mediaPlayback.ts` | HLS vs WHEP wiring, playback URLs from **`GET /api/plotter/playback`** |
 | `src/config/panelLayout.ts` | **`VITE_*`** → single vs dual API bases, loopback→LAN host rewrite |
 | `src/config/playbackMode.ts` | **`VITE_PLAYBACK_MODE`** + **`?playback=hls`** \| **`webrtc`** |
 | `src/config/debug.ts` | **`?debug=1`** / **`VITE_DEBUG=1`** → `[resgrid]` console logs |
-| `src/domain/` | Stream mode and status types shared with API shapes |
+| `src/domain/` | Publisher **mode** and status types shared with API shapes |
 | `vite.config.ts` | Dev server **:5173**, LAN-friendly CORS, optional **`VITE_DEV_PROXY_TARGET`** proxy |
 
 ---
@@ -51,7 +51,7 @@ npm run preview  # serve production build
 
 ## Docker (dev container)
 
-`Dockerfile.dev` runs **`docker-entrypoint-dev.sh`**: `npm ci` when `package-lock.json` changes, then **`npm run dev -- --host 0.0.0.0 --port 5173`**. Used by repo **`docker-compose*.yml`** services.
+`Dockerfile.dev` runs **`docker-entrypoint-dev.sh`**: `npm ci` when `package-lock.json` changes, then **`npm run dev -- --host 0.0.0.0 --port 5173`**. Used by repo **`compose/docker-compose*.yml`** services.
 
 ---
 
@@ -67,8 +67,8 @@ These are baked in at **build time** (Vite). Restart dev server after changing t
 | **`VITE_API_BASE_DL`** / **`VITE_API_BASE_UL`** | Dual-stack: downlink vs uplink FastAPI URLs; if both set, layout becomes **two columns** unless overridden. |
 | **`VITE_GUI_COMBINE`** | Force **one** column (single `ResgridPanel`) even when both DL/UL bases exist. |
 | **`VITE_GUI_DLUL`** | Force dual columns when both API bases exist (compose often sets this for DL/UL). |
-| **`VITE_PLAYBACK_MODE`** | `hls` or default branch → **`webrtc`**. Overridable per load: **`?playback=hls`** or **`?playback=webrtc`**. |
-| **`VITE_HLS_URL`** | Optional fixed HLS base when playback resolution needs a fallback (see `streamPlayback.ts`). |
+| **`VITE_PLAYBACK_MODE`** | Default **`webrtc`** (WHEP). Set **`hls`** for LL-HLS. Per load: **`?playback=hls`** or **`?playback=webrtc`**. |
+| **`VITE_HLS_URL`** | Optional fixed HLS base when playback resolution needs a fallback (see `mediaPlayback.ts`). |
 | **`VITE_DEBUG`** | Set **`1`** for verbose **`[resgrid]`** logs; or open the app with **`?debug=1`**. |
 
 If **`VITE_API_*`** uses **`localhost`** / **`127.0.0.1`** but you open the UI from a **LAN** hostname, the client **rewrites** the API host to **`window.location.hostname`** (`panelLayout.ts`) so `fetch` and Swagger links stay reachable.

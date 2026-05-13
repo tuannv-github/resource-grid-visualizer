@@ -1,4 +1,4 @@
-/** `webrtc` = MediaMTX WHEP (nearest to real-time). `hls` = segment buffering (LL-HLS tuned). */
+/** Default: WebRTC (WHEP) unless `VITE_PLAYBACK_MODE=hls` or `?playback=hls`. */
 export function playbackMode(): "webrtc" | "hls" {
   const q =
     typeof window !== "undefined"

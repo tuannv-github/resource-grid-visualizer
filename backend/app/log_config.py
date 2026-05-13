@@ -30,15 +30,29 @@ class _SkipStatusPollOnConsoleFilter(logging.Filter):
         return not getattr(record, "status_poll", False)
 
 
-class _SkipUvicornStatusAccessLineFilter(logging.Filter):
-    """Drop uvicorn access-log lines that mention GET /api/stream/status on stderr only."""
+class _SkipUvicornNoisyAccessLineFilter(logging.Filter):
+    """Drop ``uvicorn.access`` lines that duplicate ``resgrid.http`` (all ``/api/*`` + doc/health endpoints)."""
+
+    @staticmethod
+    def _is_redundant(msg: str) -> bool:
+        if "/api/" in msg:
+            return True
+        for frag in (
+            "/health HTTP",
+            "/openapi.json HTTP",
+            "/docs HTTP",
+            "/redoc HTTP",
+        ):
+            if frag in msg:
+                return True
+        return False
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
             msg = record.getMessage()
         except (ValueError, TypeError):
             msg = str(record.msg)
-        return "/api/stream/status" not in msg
+        return not self._is_redundant(msg)
 
 
 def _attach_stderr_only_filters(handler: logging.StreamHandler) -> None:
@@ -48,15 +62,17 @@ def _attach_stderr_only_filters(handler: logging.StreamHandler) -> None:
 
 def _suppress_status_poll_on_stderr_stream_handlers() -> None:
     for h in logging.getLogger().handlers:
-        if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
+        if isinstance(h, logging.StreamHandler) and not isinstance(
+            h, logging.FileHandler
+        ):
             _attach_stderr_only_filters(h)
 
 
 def attach_uvicorn_access_stderr_filters() -> None:
-    for h in logging.getLogger("uvicorn.access").handlers:
-        if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
-            if not any(isinstance(f, _SkipUvicornStatusAccessLineFilter) for f in h.filters):
-                h.addFilter(_SkipUvicornStatusAccessLineFilter())
+    """Register filters on ``uvicorn.access`` so they apply to all handlers (including any added later)."""
+    log = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, _SkipUvicornNoisyAccessLineFilter) for f in log.filters):
+        log.addFilter(_SkipUvicornNoisyAccessLineFilter())
 
 
 def get_logger(name: str = APP_LOGGER_NAME) -> logging.Logger:
@@ -64,7 +80,9 @@ def get_logger(name: str = APP_LOGGER_NAME) -> logging.Logger:
 
 
 def _level(name: str) -> int:
-    return getattr(logging, name, logging.INFO) if hasattr(logging, name) else logging.INFO
+    return (
+        getattr(logging, name, logging.INFO) if hasattr(logging, name) else logging.INFO
+    )
 
 
 def _formatter() -> logging.Formatter:
@@ -95,7 +113,9 @@ def ensure_console_logging(level_name: str) -> None:
         return
     root = logging.getLogger()
     for h in root.handlers:
-        if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
+        if isinstance(h, logging.StreamHandler) and not isinstance(
+            h, logging.FileHandler
+        ):
             _console_handler_added = True
             return
     level = _level(level_name.upper())
@@ -133,12 +153,14 @@ def configure_file_logging(
 
     path = Path(raw).resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
-    target = str(path)
-    path_s = str(path)
+    log_path = str(path)
     root = logging.getLogger()
 
     for h in root.handlers:
-        if isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", None) == target:
+        if (
+            isinstance(h, logging.FileHandler)
+            and getattr(h, "baseFilename", None) == log_path
+        ):
             _file_handler_added = True
             return True
 
@@ -152,17 +174,19 @@ def configure_file_logging(
 
     if timed_key is not None:
         fh: logging.Handler = logging.handlers.TimedRotatingFileHandler(
-            path_s,
+            log_path,
             when=timed_key,
             interval=max(1, rotate_interval),
             backupCount=backup_count,
             encoding="utf-8",
             utc=rotate_utc,
         )
-        kind = f"time-based when={timed_key!r} interval={rotate_interval} utc={rotate_utc}"
+        kind = (
+            f"time-based when={timed_key!r} interval={rotate_interval} utc={rotate_utc}"
+        )
     else:
         fh = logging.handlers.RotatingFileHandler(
-            path_s,
+            log_path,
             maxBytes=max_bytes,
             backupCount=backup_count,
             encoding="utf-8",
@@ -177,7 +201,9 @@ def configure_file_logging(
     else:
         root.setLevel(min(root.level, level))
     _file_handler_added = True
-    get_logger().info("Writing logs to %s (%s, backups=%s)", target, kind, backup_count)
+    get_logger().info(
+        "Writing logs to %s (%s, backups=%s)", log_path, kind, backup_count
+    )
     return True
 
 
@@ -193,8 +219,9 @@ def setup_backend_logging(
 ) -> None:
     """Stderr always; rotating file when *log_file* is enabled.
 
-    When file logging is on, ``GET /api/stream/status`` app logs and uvicorn access lines for that
-    path are filtered off stderr only (they still go to the file).
+    Uvicorn ``access`` lines for **/api/***, ``/health``, ``/openapi.json``, ``/docs``, and ``/redoc`` are
+    dropped (``resgrid.http`` already logs request/response bodies for API calls; other paths match the middleware too).
+    With file logging on, status-poll **app** records are also dropped from stderr only (they still go to the file).
     """
     ensure_console_logging(level_name)
     file_on = configure_file_logging(
@@ -206,6 +233,6 @@ def setup_backend_logging(
         rotate_interval=rotate_interval,
         rotate_utc=rotate_utc,
     )
+    attach_uvicorn_access_stderr_filters()
     if file_on:
         _suppress_status_poll_on_stderr_stream_handlers()
-        attach_uvicorn_access_stderr_filters()

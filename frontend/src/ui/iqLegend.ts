@@ -1,4 +1,4 @@
-import type { IqChannelLegendPayload } from "../domain/streamTypes";
+import type { IqChannelLegendPayload } from "../domain/publisherStatus";
 import { plainLegendNote } from "../lib/format";
 import { queryRole } from "./dom";
 

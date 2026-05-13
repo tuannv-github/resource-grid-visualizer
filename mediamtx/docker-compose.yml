@@ -1,4 +1,7 @@
-# MediaMTX only (bridge). Full stack: `docker compose up` from parent `resouce-grid/`.
+# MediaMTX only (RTSP ingest + LL-HLS + WebRTC/WHEP). Same service definition as the full stacks under `compose/`.
+# From `resource-grid-visualizer`:
+#   docker compose -f mediamtx/docker-compose.yml up -d
+# WebRTC from other LAN devices: set MTX_WEBRTC_ADDITIONAL_HOSTS in `.env` (see `.env.example` in this dir or `compose/.env` when included from compose/).
 # No container swap: memswap_limit equals memory (swap allowance 0).
 
 services:
@@ -9,6 +12,9 @@ services:
         limits:
           memory: 512m
     memswap_limit: 512m
+    environment:
+      # Comma-separated hostnames/IPs of THIS machine as seen by other devices (required for WebRTC/WHEP across Docker).
+      MTX_WEBRTCADDITIONALHOSTS: ${MTX_WEBRTC_ADDITIONAL_HOSTS}
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
     ports:

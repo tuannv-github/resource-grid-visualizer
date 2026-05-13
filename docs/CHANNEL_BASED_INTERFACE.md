@@ -8,7 +8,7 @@ This document is for **integrators** who want to drive **`resgrid_plotter`** wit
 
 | Term | Meaning |
 |------|---------|
-| **Stream mode** | **`SYNTHETIC_IQ`** — **full-grid** path: built-in **`--data-mode 1`** by default, or **`--data-mode 2`** + **`--iq-fifo`** when **`CUDA_IQ_USE_FIFO=1`** (each FIFO message = one **complete** grid). **`SYNTHETIC_CHANNEL_BASED`** — **slot messages** / channel-based (`--data-mode 3`): each slot FIFO message is a **slot allocation** (a **part** of the grid for one slot) plus PHY metadata; plotter **assembles** full grids. Channel-based mode always opens **slot FIFO** (`--slot-fifo`). PHY channel ids **`1…8`** come only from slot messages (OAI **`resgrid_plotter_slot_fifo`** emits **7**/**8** when CSI-RS/SRS PDUs are present). Built-in synthetic I/Q never paints `chan`. See `.env.example` (`STREAM_MODE`). Legacy **`CHANNEL_BASED_SYNTHETIC_GENERATION`** aliases channel-based mode. |
+| **Generation mode** | **`SYNTHETIC_RESOURCE_GRID`** — **full-grid** path: built-in **`--data-mode 1`** by default, or **`--data-mode 2`** + **`--fifo-resource-grid`** when **`CUDA_IQ_USE_FIFO=1`** (each FIFO message = one **complete** grid). **`SYNTHETIC_FAPI`** (historic **`SYNTHETIC_CHANNEL_BASED`**) — **slot messages** / channel-based (`--data-mode 3`): each slot FIFO message is a **slot allocation** (a **part** of the grid for one slot) plus PHY metadata; plotter **assembles** full grids. Channel-based mode always opens **slot FIFO** (`--fifo-fapi`). PHY channel ids **`1…8`** come only from slot messages (OAI **`resgrid_plotter_slot_fifo`** emits **7**/**8** when CSI-RS/SRS PDUs are present). Built-in synthetic I/Q never paints `chan`. Configure with **`GENERATION_MODE`** in compose (default **`synthetic_channel_based`** → **`SYNTHETIC_FAPI`**). Legacy **`CHANNEL_BASED_SYNTHETIC_GENERATION`** aliases channel-based mode. |
 | **Logical channel id** | Per-cell byte **`0…255`** in the plotter’s `chan` plane. **`0`** = no channel tint → **Viridis** colormap from magnitude only. **`1…8`** = fixed **PHY-style** RGB tints (see §4). **`9…255`** fall through to **neutral gray** in CUDA until explicitly mapped. |
 | **`slot_id`** | Unsigned integer grouping **multiple FIFO messages** into one **full-grid** frame. When `slot_id` **increases**, the previous slot is considered **complete** and is queued for encode (see §6). |
 
@@ -19,7 +19,7 @@ This document is for **integrators** who want to drive **`resgrid_plotter`** wit
 - **Horizontal** = **symbol index** `s` from **0** to **`symbols − 1`** (left → right).
 - **Vertical** = **PRB index** `p` from **0** at the **bottom** to **`prb − 1`** at the **top** (frequency-style orientation).
 
-This matches the Vite IQ axes (`iq_symbols`, `iq_prb` from `/api/stream/status`).
+This matches the Vite IQ axes (`iq_symbols`, `iq_prb` from `/api/plotter/status`).
 
 ---
 
@@ -31,16 +31,17 @@ Integrators sometimes confuse **named pipes on disk** with the plotter’s **in-
 
 | Pipe | Environment variable | Default path |
 |------|---------------------|--------------|
-| Full-grid I/Q | **`CUDA_IQ_FIFO_PATH`** | **`/tmp/resgrid_iq.fifo`** |
-| Slot allocation messages | **`CUDA_SLOT_FIFO_PATH`** | **`/tmp/resgrid_slot.fifo`** |
+| Full-grid I/Q | **`CUDA_IQ_FIFO_PATH`** | **`/tmp/resource_grid.fifo`** |
+| Slot allocation messages | **`CUDA_SLOT_FIFO_PATH`** | **`/tmp/fapi.fifo`** |
+| Raw RGBA video (`--fifo-images`) | **`RESGRID_FIFO_IMAGES`** | **`/tmp/images.fifo`** (when unset in env; empty string disables) |
 
-These are passed to **`resgrid_plotter`** as **`--iq-fifo`** and **`--slot-fifo`**. Override in **`.env`** / Compose when the defaults are wrong for your mount namespace (e.g. Docker volume layout).
+These are passed to **`resgrid_plotter`** as **`--fifo-resource-grid`**, **`--fifo-fapi`**, and **`--fifo-images`** respectively.
 
 **Ownership after `mkfifo`:** When the backend creates a pipe on a **host-mounted** directory (e.g. **`resouce-grid/host-tmp` → `/tmp`** in Compose), it runs **`chown`** so non-root peers can open it. **`RESGRID_FIFO_CHOWN`** defaults to **`1000:1000`** (`uid:gid`). Set **`RESGRID_FIFO_CHOWN_DISABLE=1`** to skip. If pipes were created outside the backend, run **`scripts/chown_resgrid_fifos.sh`** on that directory.
 
-When running **two** backends (DL + UL, **`docker-compose.dlul.yaml`**), use **distinct** FIFO paths per container (defaults such as **`/tmp/resgrid_iq_dl.fifo`**, **`/tmp/resgrid_slot_ul.fifo`**, etc., or the **`CUDA_*_PATH_DL` / `_UL`** variables in that compose file) so external tools can target one direction without colliding on the same pipe names.
+When running **two** backends (DL + UL, **`compose/docker-compose.dlul.yaml`**), use **distinct** FIFO paths per container (defaults such as **`/tmp/resource_grid_dl.fifo`**, **`/tmp/fapi_ul.fifo`**, etc., or the **`CUDA_*_PATH_DL` / `_UL`** variables in that compose file) so external tools can target one direction without colliding on the same pipe names.
 
-### Dual DL / UL (`docker-compose.dlul*.yaml`)
+### Dual DL / UL (`compose/docker-compose.dlul*.yaml`)
 
 Two **FastAPI** + **`resgrid_plotter`** publishers run in parallel and share one **MediaMTX** and one **Vite** app (two columns in the UI).
 
@@ -51,12 +52,12 @@ Two **FastAPI** + **`resgrid_plotter`** publishers run in parallel and share one
 | MediaMTX path (HLS / WHEP segment) | **`live_dl`** | **`live_ul`** |
 | Browser env (`VITE_*`) | **`VITE_API_BASE_DL`** | **`VITE_API_BASE_UL`** |
 
-- **MediaMTX config:** **`mediamtx/mediamtx.dlul.yml`** (not the single-path **`mediamtx.yml`**). Each backend’s **`MTX_RTSP_URL`** targets **`…/live_dl`** or **`…/live_ul`** as in **`docker-compose.dlul.yaml`**.
+- **MediaMTX config:** **`mediamtx/mediamtx.dlul.yml`** (not the single-path **`mediamtx.yml`**). Each backend’s **`MTX_RTSP_URL`** targets **`…/live_dl`** or **`…/live_ul`** as in **`compose/docker-compose.dlul.yaml`**.
 - **Vite / same-origin proxy:** DL/UL compose sets **`VITE_API_RELATIVE=0`** and does **not** use **`VITE_DEV_PROXY_TARGET`** — the UI issues **`fetch()`** and **OpenAPI /docs** links against the two **absolute** API bases. Clients must be able to reach **both** API ports (and **5173**, **8888**, etc.) from the browser, unless you put a gateway in front and set **`VITE_API_BASE_DL`** / **`VITE_API_BASE_UL`** to those URLs.
 - **OpenAPI / Swagger:** Each column’s **OpenAPI /docs** link uses that column’s **`VITE_API_BASE_*`** (DL → **8081**, UL → **8082**). If those env values use **`localhost`** / **`127.0.0.1`** but you open the UI at a LAN IP, the frontend rewrites the host to **`window.location.hostname`** (**`frontend/src/config/panelLayout.ts`**).
 - **FIFO paths:** Defaults are **direction-specific** in compose (**`CUDA_IQ_FIFO_PATH_DL` / `_UL`**, **`CUDA_SLOT_FIFO_PATH_DL` / `_UL`** → **`CUDA_IQ_FIFO_PATH`** / **`CUDA_SLOT_FIFO_PATH`** inside each container); keep DL and UL pipes on the same host bind-mount if a host process must choose which pipe to open.
 
-Compose files: **`docker-compose.dlul.yaml`** (default **273** PRB per backend), **`docker-compose.dlul.bw106.yaml`** (**106**), **`docker-compose.dlul.bw273.yaml`** (**273** naming variant).
+Compose files: **`compose/docker-compose.dlul.yaml`** (default **273** PRB per backend), **`compose/docker-compose.dlul.bw106.yaml`** (**106**), **`compose/docker-compose.dlul.bw273.yaml`** (**273** naming variant).
 
 **OAI gNB writer:** If **`resgrid_plotter`** or the backend **restarts**, the FIFO read end closes and the gNB may see **`EPIPE` / Broken pipe** on `write`. Current OAI MAC code **closes the writer fd** on write failure and **re-opens** on the next slot so connectivity recovers when the reader is back (see **`openairinterface5g/.../resgrid_plotter_slot_fifo.c`**).
 
@@ -66,7 +67,7 @@ Compose files: **`docker-compose.dlul.yaml`** (default **273** PRB per backend),
 - **`SlotCompletedQueue`** (grids **finished** when **`slot_id`** advances): when full, **drops oldest** ( **`g_slot_completed_drops`** ).
 - **`RgbaFrameQueue`**, **`RasterWorkQueue`**, **`CapturerFrameQueue`**: same **drop-oldest** pattern when full (see plotter sources for **`g_*_drops`**).
 
-Source: **`backend/resouce-grid-plotter/include/plotter_common.cuh`** (`GridFrameQueue`, `SlotCompletedQueue`, `InternalFrameQueue`, `FullGridFifoQueue`, `ChannelModeIqSidecarQueue`).
+Source: **`backend/plotter/include/plotter_common.cuh`** (`GridFrameQueue`, `SlotCompletedQueue`, `InternalFrameQueue`, `FullGridFifoQueue`, `ChannelModeIqSidecarQueue`).
 
 ---
 
@@ -84,7 +85,7 @@ Each cell is **one** complex sample:
 
 - **`float32` real**, **`float32` imag**, **little-endian**, interleaved as **`re, im`** per cell.
 
-**One IQ FIFO “frame”** (when using `--iq-fifo`) is **`ncells * 8`** bytes: cells in order **`flat_index(0,0), flat_index(0,1), …, flat_index(symbols−1, prb−1)`**.
+**One IQ FIFO “frame”** (when using `--fifo-resource-grid`) is **`ncells * 8`** bytes: cells in order **`flat_index(0,0), flat_index(0,1), …, flat_index(symbols−1, prb−1)`**.
 
 The **slot FIFO payload** (§5) uses the **same** indexing for its rectangle, but with an offset derived from **`sym_start`**, **`prb_start`** (§6 payload indexing).
 
@@ -108,7 +109,7 @@ Ids are grouped as **DL↔UL pairs** for easier recall (sync/access, control, da
 
 **Compatibility:** Older slot FIFO captures used **`1`** for SSB (labeled PBCH), **`2=PDCCH`, `3=PDSCH`, `4=PUSCH`, `5=PUCCH`, `6=PRACH`** — replotting those raw **`channel`** bytes with this layout **without regenerating** from OAI will show **wrong** PHY colors and labels.
 
-**Rendering:** CUDA applies **`channel_tint_rgb(id)`** as the base for ids **1…8**; when per-cell **`cell_rnti`** is present and non-zero, a small deterministic RGB jitter is added (**`channel_tint_modulated`** in `plotter_raster.cu`) so the same PHY channel can look slightly different per RNTI (e.g. two PDCCH or two PUSCH allocations). Magnitude is not used for that tint. Id **0** uses **Viridis** on magnitude from the I/Q grid (slot **shape-only** patches leave zeros there → dark). Naming matches **`chan_phy_name()`** (C++) and **`resource_grid_generator.py`** demos.
+**Rendering:** CUDA applies **`channel_tint_rgb(id)`** as the base for ids **1…8**; when per-cell **`cell_rnti`** is present and non-zero, a small deterministic RGB jitter is added (**`channel_tint_modulated`** in `plotter_raster.cu`) so the same PHY channel can look slightly different per RNTI (e.g. two PDCCH or two PUSCH allocations). Magnitude is not used for that tint. Id **0** uses **Viridis** on magnitude from the I/Q grid (slot **shape-only** patches leave zeros there → dark). Naming matches **`chan_phy_name()`** (C++) and **`generator.py`** demos.
 
 **Region outlines:** Before centroid labels, the plotter strokes each PHY cell’s edges in screen space where the neighbor is not the same **`chan`** / **`cell_rnti`** pair (or is outside the grid), so each allocation’s bounding box aligns with the same discrete (**symbol** × **PRB**) mapping as **`rgba_frame_kernel`**.
 
@@ -118,7 +119,7 @@ Ids are grouped as **DL↔UL pairs** for easier recall (sync/access, control, da
 
 ## 5. Slot FIFO wire format (Path C)
 
-**Pipe:** Named FIFO (default path `CUDA_SLOT_FIFO_PATH`, e.g. `/tmp/resgrid_slot.fifo`). The backend creates it when starting **slot-message / channel-based** streaming (`SYNTHETIC_CHANNEL_BASED`, or **`CUDA_PLOTTER_DATA_MODE=3`**), and passes **`--slot-fifo`** to **`resgrid_plotter`**. The legacy **`CUDA_SLOT_USE_FIFO=1`** flag is **ignored** when the plotter runs in **full-grid FIFO** (`--data-mode 2`); use channel-based stream mode or **`CUDA_PLOTTER_DATA_MODE=3`** to enable slot FIFO.
+**Pipe:** Named FIFO (default path `CUDA_SLOT_FIFO_PATH`, e.g. `/tmp/fapi.fifo`). The backend creates it when starting **slot-message / channel-based** streaming (`SYNTHETIC_FAPI` / historic **`SYNTHETIC_CHANNEL_BASED`**, or **`CUDA_PLOTTER_DATA_MODE=3`**), and passes **`--fifo-fapi`** to **`resgrid_plotter`**. The legacy **`CUDA_SLOT_USE_FIFO=1`** flag is **ignored** when the plotter runs in **full-grid FIFO** (`--data-mode 2`); use **SYNTHETIC_FAPI** (slot path) or **`CUDA_PLOTTER_DATA_MODE=3`** to enable slot FIFO.
 
 ### 5.1 Version 1 (single rectangle per record)
 
@@ -172,17 +173,17 @@ Use this when a **single slot** should carry **several** independent allocations
 | 12 | `uint8` | `channel` |
 | 13 | `uint8` | `reserved[3]` | **0** |
 
-**Python:** `struct.pack("<HHHHIB3x", …)` per region; extension = `pack("<H", n_regions) + b"".join(regions)`. See **`backend/scripts/resource_grid_generator.py`** (`pack_slot_region`, `--slot-pattern demo-multi`).
+**Python:** `struct.pack("<HHHHIB3x", …)` per region; extension = `pack("<H", n_regions) + b"".join(regions)`. See **`backend/scripts/generator.py`** (`pack_slot_region`, `--slot-pattern demo-multi`).
 
-**C++:** `struct SlotRegionDesc` in **`backend/resouce-grid-plotter/include/plotter_common.cuh`**.
+**C++:** `struct SlotRegionDesc` in **`backend/plotter/include/plotter_common.cuh`**.
 
 ### 5.3 Version 2 — single rectangle (optional)
 
 **`version = 2`** and **`flags = 0`**: same semantics as **v1** — one rectangle from the 40-byte header (no extension). Useful if you standardize on v2 but do not need multi-region.
 
-**Python reference (header):** `struct.pack("<IHHIHHHHIBBHIII", ...)` as in **`backend/scripts/resource_grid_generator.py`** (`SLOT_HDR_FMT` / `pack_slot_hdr`).
+**Python reference (header):** `struct.pack("<IHHIHHHHIBBHIII", ...)` as in **`backend/scripts/generator.py`** (`SLOT_HDR_FMT` / `pack_slot_hdr`).
 
-**C++ reference:** `struct SlotMsgHdr` in `backend/resouce-grid-plotter/include/plotter_common.cuh`.
+**C++ reference:** `struct SlotMsgHdr` in `backend/plotter/include/plotter_common.cuh`.
 
 ---
 
@@ -204,9 +205,9 @@ payload_index = s * prb_count + p                       // row-major: s outer, p
 
 **Shutdown / EOF:** The reader **flushes** the open slot (pushes one final grid) so the last assembly is not lost.
 
-**Encode priority:** A queued **completed slot** frame is consumed **before** the next `--iq-fifo` read or built-in synthetic frame for that iteration. Sidecar IQ messages carry **I/Q only** (`chan` cleared in the reader); the plotter **reuses the last completed slot’s** `chan` / `cell_rnti` on those frames so the video does not **flash** between PHY tints and bare Viridis when IQ arrives faster than slot boundaries.
+**Encode priority:** A queued **completed slot** frame is consumed **before** the next `--fifo-resource-grid` read or built-in synthetic frame for that iteration. Sidecar IQ messages carry **I/Q only** (`chan` cleared in the reader); the plotter **reuses the last completed slot’s** `chan` / `cell_rnti` on those frames so the video does not **flash** between PHY tints and bare Viridis when IQ arrives faster than slot boundaries.
 
-**Target pipeline layout:** **Assembly**, **Raster**, and **Encode** may be split into explicit stages (completed-slot queue → image queue → NVENC); see **[`PLOTTER_PIPELINE.md`](PLOTTER_PIPELINE.md)** (*Target architecture: Assembly, Raster, Encode*).
+**Target pipeline layout:** **Assembler**, **Raster**, and **Encoder** may be split into explicit stages (completed-slot queue → image queue → NVENC); see **[`PLOTTER_PIPELINE.md`](PLOTTER_PIPELINE.md)** (*Target architecture: Assembler, Raster, Encoder*).
 
 ---
 
@@ -214,9 +215,9 @@ payload_index = s * prb_count + p                       // row-major: s outer, p
 
 | Approach | Per-cell `chan` | Typical use |
 |----------|------------------|-------------|
-| **`--slot-fifo`** (slot-message / **`--data-mode 3`**) | Filled from each message’s **`channel`** (and **`rnti`**) over each patch; **v2 multi** applies several patches per FIFO record | **Only** source of PHY tints / RNTI in normal operation. |
-| Built-in C++ producer (`CUDA_IQ_USE_FIFO=0`, no slot) | **All 0** | Viridis-only heatmap; enable **slot FIFO** (or Python demo with `--slot-fifo`) for channel coloring. |
-| **`--iq-fifo` only** | **All 0** (Python producer sends I/Q only) | Magnitude-only Viridis unless **slot FIFO** also supplies `chan`. |
+| **`--fifo-fapi`** (slot-message / **`--data-mode 3`**) | Filled from each message’s **`channel`** (and **`rnti`**) over each patch; **v2 multi** applies several patches per FIFO record | **Only** source of PHY tints / RNTI in normal operation. |
+| Built-in C++ producer (`CUDA_IQ_USE_FIFO=0`, no slot) | **All 0** | Viridis-only heatmap; enable **slot FIFO** (or Python demo with `--fifo-fapi`) for channel coloring. |
+| **`--fifo-resource-grid` only** | **All 0** (Python producer sends I/Q only) | Magnitude-only Viridis unless **slot FIFO** also supplies `chan`. |
 
 ---
 
@@ -226,17 +227,17 @@ The backend creates an **`88`‑byte** POSIX shared memory object passed as **`-
 
 | Offset | Size | Type | Content |
 |--------|------|------|---------|
-| 0 | 8 | `double` | **Built-in producer** path (`--iq-fifo` off): measured synthetic producer rate (Hz), updated ~1×/s. With **`--iq-fifo`**, this slot is **not** refreshed by the stats thread (often stays the initial NaN). |
+| 0 | 8 | `double` | **Built-in producer** path (`--fifo-resource-grid` off): measured synthetic producer rate (Hz), updated ~1×/s. With **`--fifo-resource-grid`**, this slot is **not** refreshed by the stats thread (often stays the initial NaN). |
 | 8 | 8 | `double` | Measured **Raster** RGBA output rate (Hz), updated ~1×/s. |
 | 16 | 4 | `uint32` | Synthetic **pattern** id (**0…3**); backend/API can set; plotter reads for **built-in I/Q only** (waves / tone / Gaussian / vortex). Does **not** paint PHY channels — use slot FIFO for that. |
 | 20 | 4 | — | *Padding* (uninitialized zeros in the backend initializer; not read by the plotter for logic). |
 | 24 | 8 | `double` | **Commanded** frame rate / producer Hz; backend writes; plotter reads for pacing. |
 | 32 | 8 | `uint64` | Cumulative **published frames** (incremented after each full write to FFmpeg stdin). |
-| 40 | 48 | six × `double` | **Assembly** in + out (Hz) measured; **Raster in** = **Assembly out**, **Raster out** = offset **8**; **Encoder in** = **Raster out**; **Encoder out** = NVENC stdin writes/s (chained telemetry). See [`PLOTTER_PIPELINE.md`](PLOTTER_PIPELINE.md) §9. |
+| 40 | 48 | six × `double` | **Assembler** in + out (Hz) measured; **Raster in** = **Assembler out**, **Raster out** = offset **8**; **Encoder in** = **Raster out**; **Encoder out** = NVENC stdin writes/s (chained telemetry). See [`PLOTTER_PIPELINE.md`](PLOTTER_PIPELINE.md) §9. |
 
 *Exact packing matches* `backend/app/main.py` (`_pack_cuda_shm_init`, `_IQ_CUDA_SHM_BYTES = 88`) and `FpsShmMap` in `plotter_management.cu`.
 
-When **`CUDA_IQ_USE_FIFO=1`**, a separate **`32`‑byte** **`--generator-shm`** block (alias **`--producer-shm`**) is created for the Python IQ generator (measured Hz, commanded Hz, pattern) — see the docstring in `resource_grid_generator.py`.
+When **`CUDA_IQ_USE_FIFO=1`**, a separate **`32`‑byte** **`--generator-shm`** block (alias **`--producer-shm`**) is created for the Python IQ generator (measured Hz, commanded Hz, pattern) — see the docstring in `generator.py`.
 
 ---
 
@@ -244,12 +245,12 @@ When **`CUDA_IQ_USE_FIFO=1`**, a separate **`32`‑byte** **`--generator-shm`** 
 
 | Variable | Role |
 |----------|------|
-| `STREAM_MODE` | **`SYNTHETIC_CHANNEL_BASED`** (or env `synthetic_channel_based`) names the channel-oriented demo mode (same runtime as `SYNTHETIC_IQ`); PHY colors still require **slot FIFO**. **`CHANNEL_BASED_SYNTHETIC_GENERATION`** remains accepted. |
-| `CUDA_IQ_USE_FIFO` | `1` → IQ FIFO + optional `resource_grid_generator.py`. |
-| `CUDA_IQ_FIFO_PATH` | IQ named pipe path (default **`/tmp/resgrid_iq.fifo`**; see §2). |
+| `GENERATION_MODE` | **`SYNTHETIC_FAPI`** (or env `synthetic_channel_based`) names the channel-oriented demo mode (same runtime as full-grid **`SYNTHETIC_RESOURCE_GRID`** for the CUDA binary); PHY colors still require **slot FIFO**. **`CHANNEL_BASED_SYNTHETIC_GENERATION`** remains accepted. |
+| `CUDA_IQ_USE_FIFO` | `1` → IQ FIFO + optional `generator.py`. |
+| `CUDA_IQ_FIFO_PATH` | IQ named pipe path (default **`/tmp/resource_grid.fifo`**; see §2). |
 | `CUDA_IQ_QUEUE_DEPTH` | In-process **`GridFrame`** deque capacity (**not** a file); passed as **`--queue-depth`** (default **`32`**). See §2. |
 | `CUDA_SLOT_USE_FIFO` | **Deprecated / ignored** with full-grid FIFO (`--data-mode 2`). Use **`SYNTHETIC_CHANNEL_BASED`** or **`CUDA_PLOTTER_DATA_MODE=3`** for slot FIFO. (Still present in some compose files for backward compatibility.) |
-| `CUDA_SLOT_FIFO_PATH` | Slot named pipe path (default **`/tmp/resgrid_slot.fifo`**; see §2). |
+| `CUDA_SLOT_FIFO_PATH` | Slot named pipe path (default **`/tmp/fapi.fifo`**; see §2). |
 | `RESGRID_FIFO_CHOWN` | **`uid:gid`** applied after **`mkfifo`** on IQ/slot pipes (default **`1000:1000`**). |
 | `RESGRID_FIFO_CHOWN_DISABLE` | **`1`** / **`true`** → do not **`chown`** FIFOs. |
 | `CUDA_IQ_PRB`, `CUDA_IQ_SYMBOLS` | Must match your writers and plotter args. Compose **variants** set different **`CUDA_IQ_PRB`** defaults (**273** / **133** / **106**); see [`ARCHITECTURE.md`](ARCHITECTURE.md) **Configuration reference**. |
@@ -261,8 +262,8 @@ Full list: **`.env.example`** and [`ARCHITECTURE.md`](ARCHITECTURE.md) (IQ / FIF
 
 ## 10. Reference tools
 
-- **`backend/scripts/resource_grid_generator.py`** — Full-grid IQ FIFO producer at **`CUDA_IQ_GEN_FPS`**; optional **`--generator-shm`** / **`--producer-shm`** for pattern and Hz from the backend. With **`--slot-fifo`**, emits demo slot records on **`--slot-interval`**; use **`--slot-only`** for slot-FIFO-only runs. **CLI defaults when flags are omitted:** **`--prb`** ← env **`CUDA_IQ_PRB`** (else **273**); **`--slot-window-min-prb`** ← **`CUDA_SLOT_WINDOW_MIN_PRB`** (else **50**) — same env vars the FastAPI backend uses when it spawns this script.
-- **REST** — `GET /api/stream/status` returns `iq_prb`, `iq_symbols`, mode, and CUDA **stats** when running.
+- **`backend/scripts/generator.py`** — Full-grid IQ FIFO producer at **`CUDA_IQ_GEN_FPS`**; optional **`--generator-shm`** / **`--producer-shm`** for pattern and Hz from the backend. With **`--fifo-fapi`**, emits demo slot records on **`--slot-interval`**; use **`--slot-only`** for slot-FIFO-only runs. **CLI defaults when flags are omitted:** **`--prb`** ← env **`CUDA_IQ_PRB`** (else **273**); **`--slot-window-min-prb`** ← **`CUDA_SLOT_WINDOW_MIN_PRB`** (else **50**) — same env vars the FastAPI backend uses when it spawns this script.
+- **REST** — `GET /api/plotter/status` returns `iq_prb`, `iq_symbols`, mode, and CUDA **stats** when running.
 
 ---
 
@@ -272,4 +273,4 @@ Full list: **`.env.example`** and [`ARCHITECTURE.md`](ARCHITECTURE.md) (IQ / FIF
 - **`flags`:** bit **0** = **`kSlotFlagMultiRegion`** (**`1`**) → **`n_regions`** + **`SlotRegionDesc[]`** after header.
 - **`magic`:** **`0x31564153`**; wrong magic → record skipped.
 
-If you extend the protocol further, keep **little-endian** packing and update this doc together with `SlotMsgHdr` / `SlotRegionDesc` / **`resource_grid_generator.py`** (slot pack helpers).
+If you extend the protocol further, keep **little-endian** packing and update this doc together with `SlotMsgHdr` / `SlotRegionDesc` / **`generator.py`** (slot pack helpers).

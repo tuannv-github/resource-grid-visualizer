@@ -1,4 +1,4 @@
-# Runtime bind-mount dirs (FIFOs, JPEG capturer output; see docker-compose*.yml)
+# Runtime bind-mount dirs (FIFOs, JPEG capturer output; see compose/docker-compose*.yml)
 host-tmp/
 encoder-snaps/
 encoder-snaps-dl/

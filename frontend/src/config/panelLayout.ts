@@ -7,7 +7,8 @@ export type PanelBoot = {
   controlsRootId: string;
   apiBase: string;
   playbackPath: string;
-  streamRadioName: string;
+  /** Distinct HTML **id** for each panel’s mode `<select>` (DL vs UL). */
+  modeSelectId: string;
   heading: string;
 };
 
@@ -59,7 +60,7 @@ function dualPanels(dl: string, ul: string): PanelBoot[] {
       controlsRootId: "panel-dl-controls",
       apiBase: rewriteLoopbackApiBaseToPageHost(dl),
       playbackPath: "live_dl",
-      streamRadioName: "stream-mode-dl",
+      modeSelectId: "mode-select-dl",
       heading: "Downlink",
     },
     {
@@ -67,7 +68,7 @@ function dualPanels(dl: string, ul: string): PanelBoot[] {
       controlsRootId: "panel-ul-controls",
       apiBase: rewriteLoopbackApiBaseToPageHost(ul),
       playbackPath: "live_ul",
-      streamRadioName: "stream-mode-ul",
+      modeSelectId: "mode-select-ul",
       heading: "Uplink",
     },
   ];
@@ -95,7 +96,7 @@ export function resolvePanels(): ResolvedGuiLayout {
           controlsRootId: "panel-dl-controls",
           apiBase: singleApiBase(),
           playbackPath: "live",
-          streamRadioName: "stream-mode-dl",
+          modeSelectId: "mode-select-dl",
           heading: "Live (MediaMTX)",
         },
       ],
@@ -127,7 +128,7 @@ export function resolvePanels(): ResolvedGuiLayout {
         controlsRootId: "panel-dl-controls",
         apiBase: singleApiBase(),
         playbackPath: "live",
-        streamRadioName: "stream-mode-dl",
+        modeSelectId: "mode-select-dl",
         heading: "Live (MediaMTX)",
       },
     ],

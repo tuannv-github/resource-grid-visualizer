@@ -1,0 +1,24 @@
+# MediaMTX for DL + UL stacks (`live_dl` / `live_ul`). Included by `compose/docker-compose.dlul*.yaml`.
+# WebRTC ICE: set MTX_WEBRTC_ADDITIONAL_HOSTS in `compose/.env` or copy `mediamtx/.env.example` to `.env` here for standalone runs.
+# From `resource-grid-visualizer`:
+#   docker compose -f mediamtx/docker-compose.dlul.yml up -d
+# No container swap: memswap_limit equals memory (swap allowance 0).
+
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    memswap_limit: 512m
+    environment:
+      MTX_WEBRTCADDITIONALHOSTS: ${MTX_WEBRTC_ADDITIONAL_HOSTS}
+    volumes:
+      - ./mediamtx.dlul.yml:/mediamtx.yml:ro
+    ports:
+      - "8554:8554"
+      - "8888:8888"
+      - "8889:8889"
+      - "8189:8189/tcp"
+      - "8189:8189/udp"

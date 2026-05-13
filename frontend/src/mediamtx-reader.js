@@ -291,6 +291,9 @@
 
     handleError = (err) => {
       this._dbg('error', err, 'state was', this.state);
+      if (this.state === 'closed') {
+        return;
+      }
       if (this.state === 'restarting' || this.state === 'error') {
         return;
       }
@@ -331,6 +334,34 @@
       }
     };
 
+    /** Stop retries, close RTCPeerConnection, DELETE WHEP session (UI teardown / reconnect). */
+    close = () => {
+      this._dbg('close');
+      if (this.state === 'closed') {
+        return;
+      }
+      this.state = 'closed';
+      if (this.restartTimeout !== null) {
+        window.clearTimeout(this.restartTimeout);
+        this.restartTimeout = null;
+      }
+      if (this.pc !== null) {
+        try {
+          this.pc.close();
+        } catch (e) {
+          this._dbg('pc.close', e);
+        }
+        this.pc = null;
+      }
+      this.offerData = null;
+      if (this.sessionUrl !== null) {
+        const u = this.sessionUrl;
+        this.sessionUrl = null;
+        fetch(u, { method: 'DELETE' }).catch(() => {});
+      }
+      this.queuedCandidates = [];
+    };
+
     getNonAdvertisedCodecs = () => {
       return Promise.all([
         ['pcma/8000/2'],
@@ -345,6 +376,9 @@
     };
 
     start = () => {
+      if (this.state === 'closed') {
+        return;
+      }
       this.state = 'running';
       this._dbg('start WHEP handshake', this.conf.url);
 
@@ -380,17 +414,34 @@
         sdpSemantics: 'unified-plan',
       });
 
-      const direction = 'sendrecv';
+      /* Video-only WHEP by default; optional audio transceiver when conf.whepIncludeAudio (publisher may send audio). */
+      const direction = 'recvonly';
       this.pc.addTransceiver('video', { direction });
-      this.pc.addTransceiver('audio', { direction });
+      if (this.conf.whepIncludeAudio === true) {
+        this.pc.addTransceiver('audio', { direction });
+      }
+      this.pc.createDataChannel('');
+      this.pc.ondatachannel = (evt) => {
+        this._dbg('datachannel', evt.channel && evt.channel.label);
+        if (this.conf.onDataChannel !== undefined) {
+          this.conf.onDataChannel(evt);
+        }
+      };
 
       this.pc.onicecandidate = (evt) => this.onLocalCandidate(evt);
-      this.pc.oniceconnectionstatechange = () => this.onConnectionState();
+      this.pc.oniceconnectionstatechange = () => {
+        if (this.pc) {
+          this._dbg('iceConnectionState', this.pc.iceConnectionState);
+        }
+      };
       this.pc.onicegatheringstatechange = () => {
         this._dbg('iceGatheringState', this.pc && this.pc.iceGatheringState);
       };
       this.pc.onconnectionstatechange = () => {
-        this._dbg('connectionState', this.pc && this.pc.connectionState);
+        if (this.pc) {
+          this._dbg('connectionState', this.pc.connectionState);
+        }
+        this.onConnectionState();
       };
       this.pc.ontrack = (evt) => this.onTrack(evt);
 
@@ -491,11 +542,11 @@
         return;
       }
 
-      if (this.pc) {
-        this._dbg('iceConnectionState', this.pc.iceConnectionState);
+      if (!this.pc) {
+        return;
       }
 
-      if (this.pc.iceConnectionState === 'failed') {
+      if (this.pc.connectionState === 'failed' || this.pc.connectionState === 'closed') {
         this.handleError('peer connection closed');
       }
     };

@@ -13,7 +13,7 @@ hlsAllowOrigins: ["*"]
 webrtcAllowOrigins: ["*"]
 
 # ICE mux: UDP + TCP on 8189 so browsers can connect when either path works (Docker maps both in compose).
-# WHEP signaling stays on 8889/tcp. Prefer LL-HLS (port 8888) for simplest LAN viewing — see frontend default in compose.
+# WHEP signaling stays on 8889/tcp. Default UI uses WebRTC (WHEP); use ?playback=hls or VITE_PLAYBACK_MODE=hls for LL-HLS on :8888 only.
 webrtcLocalUDPAddress: :8189
 webrtcLocalTCPAddress: :8189
 # Extra time when debugging ICE; fix the root cause with additionalHosts + firewall (see below).
@@ -21,8 +21,13 @@ webrtcHandshakeTimeout: 30s
 
 # Gather ICE candidates from container interfaces (172.x). Works for same-host / quick starts with no .env.
 # For WebRTC from *other* LAN devices also set MTX_WEBRTC_ADDITIONAL_HOSTS in .env (server IP as clients reach it)
-# so browsers get a routable host candidate; open TCP+UDP 8189 for WebRTC. Default UI uses LL-HLS (?playback=webrtc for WHEP).
+# so browsers get a routable host candidate; open TCP+UDP 8189 for WebRTC. Default UI uses WebRTC (WHEP); ?playback=hls selects LL-HLS.
 webrtcIPsFromInterfaces: true
+
+# Without this, a stripped-down config can omit the upstream default and RTSP publishers never attach
+# (browsers see “no stream is available on path 'live'” while the plotter/generator look healthy).
+pathDefaults:
+  source: publisher
 
 paths:
   live:

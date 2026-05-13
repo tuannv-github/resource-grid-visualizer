@@ -2,29 +2,54 @@ import { ResgridApi } from "../api/resgridApi";
 import { createResgridLogger, isPlaybackDebugEnabled } from "../config/debug";
 import { playbackMode } from "../config/playbackMode";
 import {
+  cudaHeatmapStatusRelevant,
   cudaPlotterRunningFromStatus,
-  ffmpegPublisherRunningFromStatus,
-  isIqCudaStreamMode,
-  normalizeUiStreamMode,
-  showsSyntheticIqPatternUi,
-  STREAM_MODE_SYNTHETIC_VIDEO,
-} from "../domain/streamModes";
-import type { StreamStatus } from "../domain/streamTypes";
-import { StreamPlayback } from "../playback/streamPlayback";
+  syntheticImagesFeedRunningFromStatus,
+  isIqCudaMode,
+  normalizeUiMode,
+  SYNTHETIC_FAPI,
+  SYNTHETIC_IMAGES,
+  SYNTHETIC_RESOURCE_GRID,
+} from "../domain/publisherModes";
+import { panelVisibilityForMode } from "../domain/panelModeVisibility";
+import { LAVFI_PRESETS_FOR_SYNTHETIC_IMAGES } from "../domain/syntheticImagesLavfiPresets";
+import type { GeneratorStartBody } from "../domain/generatorModes";
+import type { PublisherStatus } from "../domain/publisherStatus";
+import { MediaPlayback } from "../playback/mediaPlayback";
 import { queryRole, requireRole } from "../ui/dom";
 import { renderIqAxes } from "../ui/iqAxes";
 import { renderIqChannelLegend, renderIqLegendError } from "../ui/iqLegend";
-import { mountPublisherModeRadios } from "../ui/publisherModeRadios";
+import { mountModeSelect } from "../ui/modeSelect";
+
+/** One **SyntheticFifoWriterStatus** slice from **GET /api/generator/status**. */
+type FifoWriterSlice = {
+  running: boolean;
+  capable: boolean;
+  pid?: number | null;
+};
+
+function formatFifoWriterStatus(slice: FifoWriterSlice | undefined, whenHidden: string): string {
+  if (!slice) return whenHidden;
+  if (slice.capable !== true) return "N/A";
+  if (slice.running === true) {
+    const p = slice.pid;
+    return p != null && Number.isFinite(p) ? `Running (pid ${Math.trunc(p)})` : "Running";
+  }
+  return "Stopped";
+}
 
 const debugEnabled = isPlaybackDebugEnabled();
 const logPlayback = createResgridLogger(debugEnabled);
+
+/** Poll merged **GET /api/plotter/status** + **GET /api/generator/status** this often (via **`fetchPublisherStatus`**). */
+const PUBLISHER_STATUS_POLL_MS = 1000;
 
 export type ResgridPanelOptions = {
   apiBase: string;
   /** MediaMTX path segment for HLS/WHEP fallback (live, live_dl, live_ul). */
   playbackPath: string;
-  /** Distinct per panel so DL/UL radios do not interfere. */
-  streamRadioName: string;
+  /** Distinct HTML **id** for this panel’s mode `<select>`. */
+  modeSelectId: string;
   /**
    * Status + configuration DOM (dashboard right column). When omitted, the same
    * element as the media root is used (single-root layout).
@@ -37,23 +62,20 @@ export class ResgridPanel {
   private readonly controlsRoot: HTMLElement;
   private readonly api: ResgridApi;
   readonly playbackPath: string;
-  private readonly streamRadioName: string;
-  private readonly playback: StreamPlayback;
-  private iqPatternLabels = new Map<number, string>();
+  private readonly modeSelectId: string;
+  private readonly playback: MediaPlayback;
   private videoAxes: HTMLElement;
   private video: HTMLVideoElement;
   private statusEl: HTMLParagraphElement;
-  private pubRunning: HTMLElement;
-  private pubEncoder: HTMLElement;
-  private pubSource: HTMLElement;
   private pubPath: HTMLElement;
+  private pubPublishing: HTMLElement;
   private pubIqProducerFps: HTMLElement;
-  private pubPipelineStages: HTMLElement | null;
-  private pubOutFps: HTMLElement;
+  private pubPipelineAsm: HTMLElement | null;
+  private pubPipelineRast: HTMLElement | null;
+  private pubPipelineEnc: HTMLElement | null;
   private pubFrames: HTMLElement;
-  private pubMode: HTMLElement;
-  private pubPlotter: HTMLElement;
-  private pubGenerator: HTMLElement;
+  private pubCudaPlotterStatus: HTMLElement;
+  private pubGenFapi: HTMLElement;
   private btnPlotterStart: HTMLButtonElement;
   private btnPlotterStop: HTMLButtonElement;
   private btnGeneratorStart: HTMLButtonElement;
@@ -62,33 +84,32 @@ export class ResgridPanel {
   private capturerPoll: ReturnType<typeof setInterval> | null = null;
   private lastGenerating: boolean | undefined = undefined;
   private controlsHydratedFromServer = false;
+  private lastPublisherStatus: PublisherStatus | null = null;
 
   constructor(mediaRoot: HTMLElement, opts: ResgridPanelOptions) {
     this.mediaRoot = mediaRoot;
     this.controlsRoot = opts.controlsRoot ?? mediaRoot;
     this.api = new ResgridApi(opts.apiBase);
     this.playbackPath = opts.playbackPath;
-    this.streamRadioName = opts.streamRadioName;
+    this.modeSelectId = opts.modeSelectId;
     this.videoAxes = requireRole(this.mediaRoot, "video-axes");
     this.video = requireRole(this.mediaRoot, "video");
     this.statusEl = requireRole(this.controlsRoot, "status");
-    this.pubRunning = requireRole(this.controlsRoot, "pub-running");
-    this.pubEncoder = requireRole(this.controlsRoot, "pub-encoder");
-    this.pubSource = requireRole(this.controlsRoot, "pub-source");
     this.pubPath = requireRole(this.controlsRoot, "pub-path");
+    this.pubPublishing = requireRole(this.controlsRoot, "pub-publishing");
     this.pubIqProducerFps = requireRole(this.controlsRoot, "pub-iq-producer-fps");
-    this.pubPipelineStages = queryRole(this.controlsRoot, "pub-pipeline-stages");
-    this.pubOutFps = requireRole(this.controlsRoot, "pub-out-fps");
+    this.pubPipelineAsm = queryRole(this.controlsRoot, "pub-pipeline-asm");
+    this.pubPipelineRast = queryRole(this.controlsRoot, "pub-pipeline-rast");
+    this.pubPipelineEnc = queryRole(this.controlsRoot, "pub-pipeline-enc");
     this.pubFrames = requireRole(this.controlsRoot, "pub-frames");
-    this.pubMode = requireRole(this.controlsRoot, "pub-mode");
-    this.pubPlotter = requireRole(this.controlsRoot, "pub-plotter");
-    this.pubGenerator = requireRole(this.controlsRoot, "pub-generator");
+    this.pubCudaPlotterStatus = requireRole(this.controlsRoot, "pub-cuda-plotter-status");
+    this.pubGenFapi = requireRole(this.controlsRoot, "pub-gen-fapi");
     this.btnPlotterStart = requireRole(this.controlsRoot, "btn-plotter-start");
     this.btnPlotterStop = requireRole(this.controlsRoot, "btn-plotter-stop");
     this.btnGeneratorStart = requireRole(this.controlsRoot, "btn-generator-start");
     this.btnGeneratorStop = requireRole(this.controlsRoot, "btn-generator-stop");
 
-    this.playback = new StreamPlayback({
+    this.playback = new MediaPlayback({
       api: this.api,
       video: this.video,
       playbackPath: this.playbackPath,
@@ -103,27 +124,45 @@ export class ResgridPanel {
     this.statusEl.textContent = text;
   }
 
-  private initPublisherModeRadios(): void {
-    const fs = queryRole<HTMLElement>(this.controlsRoot, "publisher-mode-fieldset");
+  private initModeSelect(): void {
+    const fs = queryRole<HTMLElement>(this.controlsRoot, "mode-fieldset");
     if (!fs) return;
-    mountPublisherModeRadios(fs, this.streamRadioName);
+    mountModeSelect(fs, this.modeSelectId);
   }
 
-  async loadIqPatternCatalog(): Promise<void> {
-    const j = await this.api.fetchIqPatternCatalog();
-    if (!j) return;
-    this.iqPatternLabels = new Map(j.patterns.map((p) => [p.id, p.label]));
-    const sel = queryRole<HTMLSelectElement>(this.controlsRoot, "iq-pattern-select");
+  populateLavfiSourceSelect(): void {
+    const sel = queryRole<HTMLSelectElement>(this.controlsRoot, "synthetic-images-lavfi-source");
     if (!sel) return;
     const keep = sel.value;
     sel.replaceChildren();
-    for (const p of j.patterns) {
+    const o0 = document.createElement("option");
+    o0.value = "";
+    o0.textContent = "Server default (LAVFI_VIDEO / built-in)";
+    sel.appendChild(o0);
+    for (const p of LAVFI_PRESETS_FOR_SYNTHETIC_IMAGES) {
       const o = document.createElement("option");
-      o.value = String(p.id);
+      o.value = p.id;
       o.textContent = p.label;
+      if (p.description) o.title = p.description;
       sel.appendChild(o);
     }
     if (keep && [...sel.options].some((o) => o.value === keep)) sel.value = keep;
+  }
+
+  private buildGeneratorStartBody(uiMode: string): GeneratorStartBody {
+    const n = normalizeUiMode(uiMode);
+    if (n === SYNTHETIC_IMAGES) {
+      const sel = queryRole<HTMLSelectElement>(this.controlsRoot, "synthetic-images-lavfi-source");
+      const v = sel?.value.trim() ?? "";
+      if (v === "") {
+        return { feed: "images" };
+      }
+      return { feed: "images", images: { preset: v } };
+    }
+    if (n === SYNTHETIC_RESOURCE_GRID) {
+      return { feed: "resource_grid" };
+    }
+    return { feed: "fapi" };
   }
 
   async loadIqChannelLegend(): Promise<void> {
@@ -141,28 +180,44 @@ export class ResgridPanel {
     }
   }
 
-  private updateControlPanelIqVisibility(): void {
-    const mode = this.selectedPublisherMode();
-    const iq = isIqCudaStreamMode(mode);
-    const cmdWrap = queryRole<HTMLElement>(this.controlsRoot, "iq-generator-fps-wrap");
-    const patWrap = queryRole<HTMLElement>(this.controlsRoot, "iq-pattern-wrap");
-    const genGroup = queryRole<HTMLElement>(this.controlsRoot, "generator-control-group");
-    if (cmdWrap) cmdWrap.hidden = !iq;
-    if (patWrap) patWrap.hidden = !showsSyntheticIqPatternUi(mode);
-    if (genGroup) genGroup.hidden = !iq;
-    const capGroup = queryRole<HTMLElement>(this.controlsRoot, "capturer-panel");
-    if (capGroup) capGroup.hidden = !iq;
+  private setStatusDlRowChildrenVisible(role: string, show: boolean): void {
+    const g = queryRole<HTMLElement>(this.controlsRoot, role);
+    if (!g) return;
+    for (const el of g.querySelectorAll("dt, dd")) {
+      (el as HTMLElement).hidden = !show;
+    }
   }
 
-  private hydrateControlsFromServerOnce(s: StreamStatus): void {
+  /** Applies {@link panelVisibilityForMode} to status rows, configuration rows, and control toolbars. */
+  private updatePanelVisibilityForMode(): void {
+    const mode = normalizeUiMode(this.selectedMode());
+    const v = panelVisibilityForMode(mode);
+
+    const cmdWrap = queryRole<HTMLElement>(this.controlsRoot, "generator-resource-grid-fps-wrap");
+    const lavfiWrap = queryRole<HTMLElement>(this.controlsRoot, "synthetic-images-lavfi-wrap");
+    const plotterGroup = queryRole<HTMLElement>(this.controlsRoot, "plotter-control-group");
+    const genToolbar = queryRole<HTMLElement>(this.controlsRoot, "generator-toolbar");
+    const capGroup = queryRole<HTMLElement>(this.controlsRoot, "capturer-panel");
+
+    if (cmdWrap) cmdWrap.hidden = !v.showConfigGeneratorFps;
+    if (lavfiWrap) lavfiWrap.hidden = mode !== SYNTHETIC_IMAGES;
+    if (plotterGroup) plotterGroup.hidden = !v.showControlPlotter;
+    if (genToolbar) genToolbar.hidden = false;
+    if (capGroup) capGroup.hidden = !v.showControlPlotter;
+
+    this.setStatusDlRowChildrenVisible("status-row-iq-feed-pub", v.showStatusIqFeedGeneratorRow);
+
+    const fpsRow = queryRole<HTMLElement>(this.controlsRoot, "status-row-generator-fps");
+    if (fpsRow) fpsRow.hidden = !v.showStatusIqDetailBlock;
+  }
+
+  private hydrateControlsFromServerOnce(s: PublisherStatus): void {
     if (this.controlsHydratedFromServer) return;
     this.controlsHydratedFromServer = true;
-    const uiMode = normalizeUiStreamMode(s.stream_mode);
-    const modeRadio = this.controlsRoot.querySelector<HTMLInputElement>(
-      `input[name="${this.streamRadioName}"][value="${uiMode}"]`,
-    );
-    if (modeRadio) modeRadio.checked = true;
-    const cmdInput = queryRole<HTMLInputElement>(this.controlsRoot, "iq-generator-fps");
+    const uiMode = normalizeUiMode(s.mode);
+    const modeSel = queryRole<HTMLSelectElement>(this.controlsRoot, "mode-select");
+    if (modeSel && [...modeSel.options].some((o) => o.value === uiMode)) modeSel.value = uiMode;
+    const cmdInput = queryRole<HTMLInputElement>(this.controlsRoot, "generator-resource-grid-fps");
     if (
       cmdInput &&
       s.iq_producer_command_fps != null &&
@@ -170,120 +225,95 @@ export class ResgridPanel {
     ) {
       cmdInput.value = String(Math.round(s.iq_producer_command_fps * 10) / 10);
     }
-    const patSel = queryRole<HTMLSelectElement>(this.controlsRoot, "iq-pattern-select");
-    if (
-      showsSyntheticIqPatternUi(uiMode) &&
-      patSel &&
-      s.iq_pattern != null &&
-      !Number.isNaN(s.iq_pattern)
-    ) {
-      const v = String(Math.trunc(s.iq_pattern));
-      if ([...patSel.options].some((o) => o.value === v)) patSel.value = v;
-    }
-    this.updateControlPanelIqVisibility();
+    this.updatePanelVisibilityForMode();
   }
 
-  selectedPublisherMode(): string {
-    const el = this.controlsRoot.querySelector<HTMLInputElement>(
-      `input[name="${this.streamRadioName}"]:checked`,
-    );
-    return el?.value ?? STREAM_MODE_SYNTHETIC_VIDEO;
+  selectedMode(): string {
+    const el = queryRole<HTMLSelectElement>(this.controlsRoot, "mode-select");
+    return el?.value ?? SYNTHETIC_FAPI;
   }
 
   private clearPipelineStages(): void {
-    const el = this.pubPipelineStages;
-    if (!el) return;
-    el.replaceChildren();
-    el.classList.remove("panel-status-pipeline--active");
-    const ph = document.createElement("span");
-    ph.className = "pipeline-stages-placeholder";
-    ph.textContent = "—";
-    el.appendChild(ph);
+    if (this.pubPipelineAsm) this.pubPipelineAsm.textContent = "—";
+    if (this.pubPipelineRast) this.pubPipelineRast.textContent = "—";
+    if (this.pubPipelineEnc) this.pubPipelineEnc.textContent = "—";
   }
 
   /**
-   * Per-stage **output** throughput only (Hz): each value is what leaves that stage and is the **input**
-   * to the next (Assembly → Raster → Encoder → RTSP).
+   * Per-stage **output** throughput (Hz): value leaving each stage toward the next
+   * (Assembler → Raster → Encoder → RTSP).
    */
-  private renderPipelineStagesPanel(s: StreamStatus): void {
-    const el = this.pubPipelineStages;
-    if (!el) return;
+  private renderPipelineStagesPanel(s: PublisherStatus): void {
     const hzStr = (v: number | null | undefined): string =>
       v != null && !Number.isNaN(v) ? v.toFixed(1) : "—";
     const rout = s.raster_output_image_s ?? s.iq_plotter_fps;
     const encOut = s.encoder_output_fps ?? s.stats?.fps ?? null;
-    el.classList.add("panel-status-pipeline--active");
-    el.replaceChildren();
-
-    const block = (heading: string, outHz: string): HTMLDivElement => {
-      const wrap = document.createElement("div");
-      wrap.className = "pipeline-block";
-      const ht = document.createElement("div");
-      ht.className = "pipeline-block__title";
-      ht.textContent = heading;
-      const row = document.createElement("div");
-      row.className = "pipeline-row pipeline-row--single";
-      const m = document.createElement("div");
-      m.className = "pipeline-metric";
-      const lb = document.createElement("span");
-      lb.className = "pipeline-metric__label";
-      lb.textContent = "Output";
-      const vl = document.createElement("span");
-      vl.className = "pipeline-metric__value";
-      vl.textContent = outHz;
-      m.append(lb, vl);
-      row.append(m);
-      wrap.append(ht, row);
-      return wrap;
-    };
-
-    const root = document.createElement("div");
-    root.className = "pipeline-stages";
-    root.append(
-      block("Assembly → Raster input", hzStr(s.assembly_output_slot_s)),
-      block("Raster → Encoder input", hzStr(rout)),
-      block("Encoder → RTSP / viewer", hzStr(encOut)),
-    );
-    el.appendChild(root);
+    if (this.pubPipelineAsm) this.pubPipelineAsm.textContent = hzStr(s.assembly_output_slot_s);
+    if (this.pubPipelineRast) this.pubPipelineRast.textContent = hzStr(rout);
+    if (this.pubPipelineEnc) this.pubPipelineEnc.textContent = hzStr(encOut);
   }
 
-  applyStreamStatus(s: StreamStatus): void {
+  applyPublisherStatus(s: PublisherStatus): void {
     this.hydrateControlsFromServerOnce(s);
 
-    this.pubMode.textContent = s.stream_mode;
-    this.pubRunning.textContent = s.generating ? "Yes" : "No";
-    this.pubEncoder.textContent = s.video_encoder;
-    this.pubSource.textContent = s.lavfi_video ?? "—";
+    const cudaPlotterUp = cudaPlotterRunningFromStatus(s);
+    const syntheticImagesFeedUp = syntheticImagesFeedRunningFromStatus(s);
+    const heatmapRelevant = cudaHeatmapStatusRelevant(s);
+    const uiMode = normalizeUiMode(this.selectedMode());
+    const uiIqGenerator = isIqCudaMode(uiMode);
+    const serverProcessIq = isIqCudaMode(s.mode);
+
     this.pubPath.textContent = s.mtx_path;
+    this.pubPublishing.textContent = s.generating ? "Yes" : "No";
+    this.pubCudaPlotterStatus.textContent = cudaPlotterUp ? "Running" : "Stopped";
     const st = s.stats ?? null;
-    const activeIq = isIqCudaStreamMode(s.stream_mode);
-    this.pubOutFps.textContent =
-      st?.fps != null && !Number.isNaN(st.fps) ? st.fps.toFixed(1) : "—";
     this.pubFrames.textContent = st?.frame != null ? String(st.frame) : "—";
     this.pubIqProducerFps.textContent =
-      activeIq && s.iq_producer_fps != null && !Number.isNaN(s.iq_producer_fps)
+      heatmapRelevant && s.iq_producer_fps != null && !Number.isNaN(s.iq_producer_fps)
         ? s.iq_producer_fps.toFixed(1)
         : "—";
 
-    if (this.pubPipelineStages) {
-      if (!activeIq || !s.generating) {
+    if (this.pubPipelineAsm || this.pubPipelineRast || this.pubPipelineEnc) {
+      if (!heatmapRelevant || !s.generating) {
         this.clearPipelineStages();
       } else {
         this.renderPipelineStagesPanel(s);
       }
     }
 
-    const cudaPlotterUp = cudaPlotterRunningFromStatus(s);
-    const ffmpegUp = ffmpegPublisherRunningFromStatus(s);
-    const plotterRunning = cudaPlotterUp || ffmpegUp;
-    this.pubPlotter.textContent = plotterRunning ? "Running" : "Stopped";
+    const srg = s.synthetic_resource_grid;
+    const sfa = s.synthetic_fapi;
+    /** True if any generator path is running (same for every UI **mode** so Stop stays clickable when switching the dropdown). */
+    const anyGenRunning =
+      syntheticImagesFeedUp || srg?.running === true || sfa?.running === true;
+    const generatorModeKnown =
+      uiMode === SYNTHETIC_IMAGES ||
+      uiMode === SYNTHETIC_RESOURCE_GRID ||
+      uiMode === SYNTHETIC_FAPI;
 
-    const genCapable = s.iq_generator_capable === true;
-    const genRunning = s.iq_generator_running === true;
-    if (!activeIq) this.pubGenerator.textContent = "—";
-    else if (!s.generating) this.pubGenerator.textContent = "—";
-    else if (!genCapable) this.pubGenerator.textContent = "N/A";
-    else this.pubGenerator.textContent = genRunning ? "Running" : "Stopped";
+    const pubModeFifo = queryRole<HTMLElement>(this.controlsRoot, "pub-mode-fifo-path");
+    if (pubModeFifo) {
+      if (uiMode === SYNTHETIC_IMAGES) {
+        const p = s.video_generator_fifo_path?.trim();
+        pubModeFifo.textContent = p || "—";
+      } else if (uiMode === SYNTHETIC_RESOURCE_GRID) {
+        const p = srg?.fifo_path?.trim();
+        pubModeFifo.textContent = p || "—";
+      } else if (uiMode === SYNTHETIC_FAPI) {
+        const p = sfa?.fifo_path?.trim();
+        pubModeFifo.textContent = p || "—";
+      } else {
+        pubModeFifo.textContent = "—";
+      }
+    }
+
+    const iqLike = uiIqGenerator;
+    const dash = "—";
+    if (!iqLike) {
+      this.pubGenFapi.textContent = dash;
+    } else {
+      this.pubGenFapi.textContent = formatFifoWriterStatus(sfa, dash);
+    }
 
     const capWrap = queryRole<HTMLElement>(this.controlsRoot, "capturer-progress-wrap");
     const capInflight = queryRole<HTMLProgressElement>(this.controlsRoot, "capturer-progress-inflight");
@@ -319,13 +349,9 @@ export class ResgridPanel {
         };
         if (!capable) {
           setBars(false, 0, 0);
-          capStat.textContent =
-            "Not configured: set RESGRID_CAPTURER_DIR (or legacy RESGRID_ENCODER_SNAP_DIR) and restart the plotter.";
+          capStat.textContent = "";
         } else if (act && tot > 0) {
-          if (phase === "capturing") {
-            setBars(true, inflight, written);
-            capStat.textContent = `${diskQueue(written, inflight)}${queueDetail}${dir ? ` → ${dir}` : ""}`;
-          } else if (phase === "saving") {
+          if (phase === "capturing" || phase === "saving") {
             setBars(true, inflight, written);
             capStat.textContent = `${diskQueue(written, inflight)}${queueDetail}${dir ? ` → ${dir}` : ""}`;
           } else {
@@ -358,73 +384,38 @@ export class ResgridPanel {
       }
     }
 
-    this.btnPlotterStart.disabled = cudaPlotterUp || ffmpegUp;
-    this.btnPlotterStop.disabled = !(cudaPlotterUp || ffmpegUp);
-    this.btnGeneratorStart.disabled =
-      !activeIq || !s.generating || !genCapable || genRunning;
-    this.btnGeneratorStop.disabled = !activeIq || !s.generating || !genRunning;
-
-    const patRow = queryRole<HTMLElement>(this.controlsRoot, "iq-pattern-status-row");
-    if (patRow) patRow.hidden = !showsSyntheticIqPatternUi(s.stream_mode);
-    const pubPat = queryRole<HTMLElement>(this.controlsRoot, "pub-iq-pattern");
-    if (pubPat) {
-      if (
-        !showsSyntheticIqPatternUi(s.stream_mode) ||
-        s.iq_pattern == null ||
-        Number.isNaN(s.iq_pattern)
-      ) {
-        pubPat.textContent = "—";
-      } else {
-        const id = Math.trunc(s.iq_pattern);
-        pubPat.textContent = this.iqPatternLabels.get(id) ?? String(id);
+    /* Plotter accepts FIFO/env configuration; do not gate Start on UI **mode**. */
+    this.btnPlotterStart.disabled = cudaPlotterUp;
+    this.btnPlotterStop.disabled = !cudaPlotterUp;
+    const srcSel = queryRole<HTMLSelectElement>(this.controlsRoot, "synthetic-images-lavfi-source");
+    if (srcSel) {
+      srcSel.disabled = syntheticImagesFeedUp;
+      const sid = s.video_generator_source;
+      if (sid && [...srcSel.options].some((o) => o.value === sid)) {
+        srcSel.value = sid;
       }
     }
-    renderIqAxes(this.mediaRoot, s.iq_prb ?? 273, s.iq_symbols ?? 14, activeIq);
+    /* Stop follows **any** running generator; Start only when none are (server enforces a single feed). */
+    this.btnGeneratorStart.disabled = !generatorModeKnown || anyGenRunning;
+    this.btnGeneratorStop.disabled = !generatorModeKnown || !anyGenRunning;
+
+    renderIqAxes(this.mediaRoot, s.iq_prb ?? 273, s.iq_symbols ?? 14, heatmapRelevant);
 
     const legendSec = queryRole<HTMLElement>(this.mediaRoot, "iq-legend-section");
-    if (legendSec) legendSec.hidden = !activeIq;
-    this.updateControlPanelIqVisibility();
-  }
-
-  async putIqPattern(): Promise<void> {
-    if (!showsSyntheticIqPatternUi(this.selectedPublisherMode())) {
-      this.setPlaybackStatus(
-        "Synthetic IQ pattern applies only to SYNTHETIC_IQ (mode 2), not channel-based.",
-      );
-      return;
-    }
-    const sel = queryRole<HTMLSelectElement>(this.controlsRoot, "iq-pattern-select");
-    if (!sel) return;
-    const pattern = parseInt(sel.value, 10);
-    if (!Number.isFinite(pattern)) {
-      this.setPlaybackStatus("Pattern: invalid selection");
-      return;
-    }
-    const url = `${this.api.baseUrl}/api/stream/iq/pattern`;
-    try {
-      const r = await this.api.putIqPattern(pattern, logPlayback);
-      if (!r.ok) {
-        const t = await r.text();
-        this.setPlaybackStatus(`Pattern update failed: ${r.status} ${t.slice(0, 120)}`);
-        return;
-      }
-      this.setPlaybackStatus("IQ pattern updated");
-      await this.refreshPublisherStatus();
-    } catch (e) {
-      logPlayback("PUT", url, "failed", e);
-      this.setPlaybackStatus("Pattern: network error");
-    }
+    if (legendSec) legendSec.hidden = !(uiIqGenerator || serverProcessIq);
+    this.updatePanelVisibilityForMode();
+    this.lastPublisherStatus = s;
   }
 
   async putIqGeneratorFps(): Promise<void> {
-    const input = queryRole<HTMLInputElement>(this.controlsRoot, "iq-generator-fps");
+    const input = queryRole<HTMLInputElement>(this.controlsRoot, "generator-resource-grid-fps");
     if (!input) return;
     const fps = parseFloat(input.value);
     if (!Number.isFinite(fps)) {
       this.setPlaybackStatus("Generator FPS: invalid number");
       return;
     }
-    const url = `${this.api.baseUrl}/api/stream/iq/generator-fps`;
+    const url = `${this.api.baseUrl}/api/generator/fps`;
     try {
       const r = await this.api.putIqGeneratorFps(fps, logPlayback);
       if (!r.ok) {
@@ -442,12 +433,12 @@ export class ResgridPanel {
     }
   }
 
-  async fetchStreamStatus(): Promise<StreamStatus | null> {
-    return this.api.fetchStreamStatus(logPlayback);
+  async fetchPublisherStatus(): Promise<PublisherStatus | null> {
+    return this.api.fetchPublisherStatus(logPlayback);
   }
 
   async refreshPublisherStatus(): Promise<void> {
-    const s = await this.fetchStreamStatus();
+    const s = await this.fetchPublisherStatus();
     if (s) {
       const prev = this.lastGenerating;
       this.lastGenerating = s.generating;
@@ -455,7 +446,7 @@ export class ResgridPanel {
         this.playback.setGraceMs(Date.now() + 14_000);
         this.playback.nudgePlaybackAfterPublish();
       }
-      this.applyStreamStatus(s);
+      this.applyPublisherStatus(s);
 
       if (
         s.generating &&
@@ -474,57 +465,67 @@ export class ResgridPanel {
         }
       }
     } else {
-      this.pubRunning.textContent = "Unknown (API unreachable)";
-      this.pubMode.textContent = "—";
-      this.pubEncoder.textContent = "—";
-      this.pubSource.textContent = "—";
+      this.pubPublishing.textContent = "—";
       this.pubPath.textContent = "—";
-      this.pubOutFps.textContent = "—";
       this.pubFrames.textContent = "—";
       this.pubIqProducerFps.textContent = "—";
-      const pubPatUnk = queryRole<HTMLElement>(this.controlsRoot, "pub-iq-pattern");
-      const patRowUnk = queryRole<HTMLElement>(this.controlsRoot, "iq-pattern-status-row");
-      if (pubPatUnk) pubPatUnk.textContent = "—";
-      if (patRowUnk)
-        patRowUnk.hidden = !showsSyntheticIqPatternUi(this.selectedPublisherMode());
       this.btnPlotterStart.disabled = false;
       this.btnPlotterStop.disabled = true;
       this.btnGeneratorStart.disabled = true;
       this.btnGeneratorStop.disabled = true;
-      this.pubPlotter.textContent = "—";
-      this.pubGenerator.textContent = "—";
+      this.pubGenFapi.textContent = "—";
+      this.pubCudaPlotterStatus.textContent = "—";
       this.videoAxes.dataset.iqVisible = "false";
       const legendUnk = queryRole<HTMLElement>(this.mediaRoot, "iq-legend-section");
       if (legendUnk) legendUnk.hidden = true;
       this.clearPipelineStages();
-      this.updateControlPanelIqVisibility();
+      this.updatePanelVisibilityForMode();
     }
   }
 
-  private async postStream(path: "start" | "stop"): Promise<{ status: string }> {
-    const mode = this.selectedPublisherMode();
-    const r = await this.api.postStream(path, mode, logPlayback);
-    if (!r.ok) {
-      const t = await r.text();
-      throw new Error(t || r.statusText);
-    }
-    return (await r.json()) as { status: string };
+  private plotterEncoderFpsStartOption(): number | undefined {
+    const inp = queryRole<HTMLInputElement>(this.controlsRoot, "plotter-encoder-fps");
+    if (!inp) return undefined;
+    const raw = inp.value.trim();
+    if (raw === "") return undefined;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return undefined;
+    return Math.round(n);
+  }
+
+  private syncPlotterEncoderFpsInputFromResponse(j: {
+    encoder_fps?: number | null;
+  }): void {
+    if (j.encoder_fps == null || Number.isNaN(j.encoder_fps)) return;
+    const inp = queryRole<HTMLInputElement>(this.controlsRoot, "plotter-encoder-fps");
+    if (!inp) return;
+    inp.value = String(Math.trunc(j.encoder_fps));
   }
 
   async onPlotterStart(): Promise<void> {
-    const mode = this.selectedPublisherMode();
+    const encOpt = this.plotterEncoderFpsStartOption();
+    if (encOpt !== undefined && (encOpt < 1 || encOpt > 50)) {
+      this.setPlaybackStatus(
+        "Encoder FPS must be between 1 and 50, or leave the field empty for the server default.",
+      );
+      return;
+    }
     this.btnPlotterStart.disabled = true;
     try {
-      let j: { status: string };
-      if (isIqCudaStreamMode(mode)) {
-        const r = await this.api.postPlotterStart(mode, logPlayback);
-        if (!r.ok) {
-          const t = await r.text();
-          throw new Error(t || r.statusText);
-        }
-        j = (await r.json()) as { status: string };
-      } else {
-        j = await this.postStream("start");
+      const startBody: { encoder_fps?: number } = {};
+      if (encOpt !== undefined) startBody.encoder_fps = encOpt;
+      let j: { status: string; encoder_fps?: number | null };
+      const r = await this.api.postPlotterStart(
+        Object.keys(startBody).length ? startBody : undefined,
+        logPlayback,
+      );
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t || r.statusText);
+      }
+      j = (await r.json()) as { status: string; encoder_fps?: number | null };
+      if (j.status === "started" || j.status === "already_running") {
+        this.syncPlotterEncoderFpsInputFromResponse(j);
       }
       if (j.status === "started") {
         this.lastGenerating = false;
@@ -536,6 +537,63 @@ export class ResgridPanel {
     } catch (e) {
       this.setPlaybackStatus(
         `Plotter start failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      await this.refreshPublisherStatus();
+    }
+  }
+
+  async onGeneratorStart(): Promise<void> {
+    this.btnGeneratorStart.disabled = true;
+    const uiMode = normalizeUiMode(this.selectedMode());
+    try {
+      const r = await this.api.postGeneratorStart(this.buildGeneratorStartBody(uiMode), logPlayback);
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(this.parseApiErrorDetail(t) || r.statusText);
+      }
+      const j = (await r.json()) as { status: string };
+      if (j.status === "started") {
+        this.lastGenerating = false;
+      }
+      if (uiMode === SYNTHETIC_IMAGES) {
+        this.setPlaybackStatus(
+          "Video generator started — connecting… If you use LL-HLS, the first manifest requests may 404 until RTSP publish is live.",
+        );
+      } else if (uiMode === SYNTHETIC_RESOURCE_GRID) {
+        this.setPlaybackStatus("SYNTHETIC_RESOURCE_GRID generator started.");
+      } else {
+        this.setPlaybackStatus("SYNTHETIC_FAPI generator started.");
+      }
+      await this.refreshPublisherStatus();
+    } catch (e) {
+      this.setPlaybackStatus(
+        `Generator start failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      await this.refreshPublisherStatus();
+    }
+  }
+
+  async onGeneratorStop(): Promise<void> {
+    this.btnGeneratorStop.disabled = true;
+    const uiMode = normalizeUiMode(this.selectedMode());
+    try {
+      const r = await this.api.postGeneratorFeedStop(logPlayback);
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(this.parseApiErrorDetail(t) || r.statusText);
+      }
+      const j = (await r.json()) as { status: string };
+      if (j.status === "not_running") {
+        this.setPlaybackStatus("Generator was not running.");
+      } else if (uiMode === SYNTHETIC_IMAGES) {
+        this.setPlaybackStatus("Video generator stopped.");
+      } else {
+        this.setPlaybackStatus("SYNTHETIC_RESOURCE_GRID / SYNTHETIC_FAPI generator stopped.");
+      }
+      await this.refreshPublisherStatus();
+    } catch (e) {
+      this.setPlaybackStatus(
+        `Generator stop failed: ${e instanceof Error ? e.message : String(e)}`,
       );
       await this.refreshPublisherStatus();
     }
@@ -592,9 +650,9 @@ export class ResgridPanel {
     if (this.capturerPoll) clearInterval(this.capturerPoll);
     this.capturerPoll = setInterval(() => {
       void (async () => {
-        const st = await this.fetchStreamStatus();
+        const st = await this.fetchPublisherStatus();
         if (!st) return;
-        this.applyStreamStatus(st);
+        this.applyPublisherStatus(st);
         if (!st.capturer_active) {
           if (this.capturerPoll) clearInterval(this.capturerPoll);
           this.capturerPoll = null;
@@ -604,17 +662,12 @@ export class ResgridPanel {
   }
 
   async onPlotterStop(): Promise<void> {
-    const mode = this.selectedPublisherMode();
     this.btnPlotterStop.disabled = true;
     try {
-      if (isIqCudaStreamMode(mode)) {
-        const r = await this.api.postPlotterStop(logPlayback);
-        if (!r.ok) {
-          const t = await r.text();
-          throw new Error(t || r.statusText);
-        }
-      } else {
-        await this.postStream("stop");
+      const r = await this.api.postPlotterStop(logPlayback);
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t || r.statusText);
       }
       await this.refreshPublisherStatus();
       this.setPlaybackStatus(
@@ -628,47 +681,25 @@ export class ResgridPanel {
     }
   }
 
-  private async postGenerator(path: "start" | "stop"): Promise<{ status: string; pid?: number }> {
-    const r = await this.api.postGenerator(path, logPlayback);
-    if (!r.ok) {
-      const t = await r.text();
-      throw new Error(t || r.statusText);
-    }
-    return (await r.json()) as { status: string; pid?: number };
-  }
-
-  async onGeneratorStart(): Promise<void> {
-    this.btnGeneratorStart.disabled = true;
+  private parseApiErrorDetail(body: string): string {
+    const raw = body.trim();
+    if (!raw) return "Request failed";
     try {
-      const j = await this.postGenerator("start");
-      this.setPlaybackStatus(
-        j.status === "already_running"
-          ? "Generator already running"
-          : "Generator started",
-      );
-      await this.refreshPublisherStatus();
-    } catch (e) {
-      this.setPlaybackStatus(
-        `Generator start failed: ${e instanceof Error ? e.message : String(e)}`,
-      );
-      await this.refreshPublisherStatus();
+      const j = JSON.parse(raw) as { detail?: unknown };
+      if (typeof j.detail === "string") return j.detail;
+      if (Array.isArray(j.detail)) {
+        return j.detail
+          .map((item: unknown) =>
+            item && typeof item === "object" && item !== null && "msg" in (item as object)
+              ? String((item as { msg: string }).msg)
+              : String(item),
+          )
+          .join("; ");
+      }
+    } catch {
+      /* not JSON */
     }
-  }
-
-  async onGeneratorStop(): Promise<void> {
-    this.btnGeneratorStop.disabled = true;
-    try {
-      const j = await this.postGenerator("stop");
-      this.setPlaybackStatus(
-        j.status === "not_running" ? "Generator was not running" : "Generator stopped",
-      );
-      await this.refreshPublisherStatus();
-    } catch (e) {
-      this.setPlaybackStatus(
-        `Generator stop failed: ${e instanceof Error ? e.message : String(e)}`,
-      );
-      await this.refreshPublisherStatus();
-    }
+    return raw;
   }
 
   private setSwaggerLink(): void {
@@ -677,23 +708,19 @@ export class ResgridPanel {
   }
 
   start(): void {
-    this.initPublisherModeRadios();
-    for (const el of this.controlsRoot.querySelectorAll<HTMLInputElement>(
-      `input[name="${this.streamRadioName}"]`,
-    )) {
-      el.addEventListener("change", () => this.updateControlPanelIqVisibility());
-    }
+    this.initModeSelect();
+    queryRole<HTMLSelectElement>(this.controlsRoot, "mode-select")?.addEventListener("change", () => {
+      this.updatePanelVisibilityForMode();
+      if (this.lastPublisherStatus) this.applyPublisherStatus(this.lastPublisherStatus);
+    });
     this.setSwaggerLink();
     this.btnPlotterStart.addEventListener("click", () => void this.onPlotterStart());
     this.btnPlotterStop.addEventListener("click", () => void this.onPlotterStop());
     this.btnGeneratorStart.addEventListener("click", () => void this.onGeneratorStart());
     this.btnGeneratorStop.addEventListener("click", () => void this.onGeneratorStop());
-    queryRole<HTMLButtonElement>(this.controlsRoot, "btn-iq-generator-fps-apply")?.addEventListener(
+    queryRole<HTMLButtonElement>(this.controlsRoot, "btn-generator-resource-grid-fps-apply")?.addEventListener(
       "click",
       () => void this.putIqGeneratorFps(),
-    );
-    queryRole<HTMLButtonElement>(this.controlsRoot, "btn-iq-pattern-apply")?.addEventListener("click", () =>
-      void this.putIqPattern(),
     );
     queryRole<HTMLButtonElement>(this.controlsRoot, "btn-capturer-start")?.addEventListener("click", () =>
       void this.onCapturerStart(),
@@ -704,7 +731,7 @@ export class ResgridPanel {
 
     this.playback.attachVideoListeners();
 
-    this.statusPoll = setInterval(() => void this.refreshPublisherStatus(), 2000);
+    this.statusPoll = setInterval(() => void this.refreshPublisherStatus(), PUBLISHER_STATUS_POLL_MS);
 
     logPlayback("boot", {
       href: typeof window !== "undefined" ? window.location.href : "",
@@ -713,8 +740,9 @@ export class ResgridPanel {
       debug: debugEnabled,
     });
     void (async () => {
-      await Promise.all([this.loadIqPatternCatalog(), this.loadIqChannelLegend()]);
-      this.updateControlPanelIqVisibility();
+      await this.loadIqChannelLegend();
+      this.populateLavfiSourceSelect();
+      this.updatePanelVisibilityForMode();
       await this.refreshPublisherStatus();
       await this.playback.ensurePlaybackSubscription();
     })();
