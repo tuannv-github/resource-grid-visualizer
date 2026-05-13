@@ -1,0 +1,19 @@
+# MediaMTX only (bridge). Full stack: `docker compose up` from parent `resouce-grid/`.
+# No container swap: memswap_limit equals memory (swap allowance 0).
+
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    memswap_limit: 512m
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    ports:
+      - "8554:8554"
+      - "8888:8888"
+      - "8889:8889"
+      - "8189:8189/tcp"
+      - "8189:8189/udp"

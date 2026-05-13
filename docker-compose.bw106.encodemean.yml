@@ -1,0 +1,182 @@
+# Same as docker-compose.bw106.yml (PRB 106) plus resgrid_plotter --encode-policy mean:
+# each NVENC tick sends the per-pixel average of RGBA frames rendered since the previous tick (see CHANNEL_BASED_INTERFACE.md).
+# MediaMTX + backend + Vite frontend (bind mounts, HMR, uvicorn --reload).
+# LAN: http://<host-ip>:5173 — open firewall TCP 5173,8081,8888,8889 (and 8189 tcp+udp if you use ?playback=webrtc).
+# Frontend defaults to LL-HLS (8888, all TCP) in compose so video works without WebRTC ICE; set VITE_PLAYBACK_MODE=webrtc to prefer WHEP.
+# WebRTC/WHEP: set MTX_WEBRTC_ADDITIONAL_HOSTS to this server's LAN IP for remote viewers.
+#
+# Backend requests an NVIDIA GPU and defaults to NVENC (h264_nvenc). Prerequisites: proprietary driver +
+# [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+# Verify: `nvidia-smi` and `docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi`
+# If compose fails with "could not select device driver nvidia": `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker`
+# We use deploy.reservations.devices (driver: nvidia), not top-level `gpus: all` (avoids some CDI noise).
+# No container swap: `memswap_limit` must equal `memory` — Docker’s total cap is RAM+swap; equal values ⇒ swap room is 0 (not “8g of swap”).
+# CPU-only (no GPU): remove the `deploy:` block under `backend`, set `VIDEO_ENCODER=cpu`, drop NVIDIA_* env vars.
+#
+# Default stream mode is SYNTHETIC_CHANNEL_BASED (slot messages / resgrid_plotter --data-mode 3 + slot FIFO).
+# AUTO_START defaults to 1: starts the CUDA plotter only (FFmpeg if STREAM_MODE=SYNTHETIC_VIDEO). Python
+# resource_grid_generator is NOT started unless CUDA_AUTO_START_IQ_GENERATOR=1 (default 0); use the API/UI generator group.
+# Override mode with STREAM_MODE=SYNTHETIC_IQ or SYNTHETIC_VIDEO. Legacy CHANNEL_BASED_SYNTHETIC_GENERATION is still accepted.
+# Rebuild backend when changing `backend/resouce-grid-plotter/`. `backend/scripts/` is bind-mounted below for live edits to the IQ/slot producers.
+#
+# If frontend logs show nginx (not Vite), the container is on an old image — run:
+#   docker compose rm -sf frontend && docker compose build --no-cache frontend && docker compose up -d
+#
+# Ports: 8888 HLS, 8889 WHEP/WHIP (HTTP), 8189/tcp+udp WebRTC ICE, 8081 API, 5173 UI, 8554 RTSP.
+#
+# FIFOs (channel-based slot + optional IQ): default paths are /tmp/resgrid_slot.fifo and /tmp/resgrid_iq.fifo
+# inside the backend container. Bind-mount host dir `host-tmp/` (repo: resouce-grid/host-tmp) onto /tmp via
+# RESGRID_HOST_TMP (default ./host-tmp) so OAI or other host tools can share the same named pipes (see nws compose).
+#
+# File capturer (JPEG): host dir `encoder-snaps/` → container /encoder-snaps via RESGRID_HOST_CAPTURER_SNAPS
+# (default ./encoder-snaps); RESGRID_CAPTURER_DIR defaults to /encoder-snaps. Restart the plotter after changing.
+#
+#   docker compose watch
+
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    memswap_limit: 512m
+    environment:
+      # Comma-separated hostnames/IPs of THIS machine as seen by other devices (required for WebRTC/WHEP across Docker).
+      MTX_WEBRTCADDITIONALHOSTS: ${MTX_WEBRTC_ADDITIONAL_HOSTS:-}
+    volumes:
+      - ./mediamtx/mediamtx.yml:/mediamtx.yml:ro
+    ports:
+      - "8554:8554"
+      - "8888:8888"
+      - "8889:8889"
+      - "8189:8189/tcp"
+      - "8189:8189/udp"
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    deploy:
+      resources:
+        limits:
+          memory: 32g
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    memswap_limit: 32g
+    # Override base image ENTRYPOINT (ffmpeg) so this process is uvicorn, not ffmpeg + these args.
+    entrypoint:
+      - uvicorn
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,video,utility}
+      MTX_RTSP_URL: rtsp://mediamtx:8554/live
+      MTX_WAIT_HOST: mediamtx
+      MTX_WAIT_PORT: "8554"
+      AUTO_START: ${AUTO_START:-1}
+      # Plotter only on boot; set to 1 to also spawn resource_grid_generator.py with CUDA.
+      CUDA_AUTO_START_IQ_GENERATOR: ${CUDA_AUTO_START_IQ_GENERATOR:-0}
+      STREAM_MODE: ${STREAM_MODE:-SYNTHETIC_CHANNEL_BASED}
+      VIDEO_ENCODER: ${VIDEO_ENCODER:-nvenc}
+      CUDA_IQ_FPS: ${CUDA_IQ_FPS:-24}
+      CUDA_IQ_CELL_PIXELS: ${CUDA_IQ_CELL_PIXELS:-6}
+      CUDA_IQ_PRESET: ${CUDA_IQ_PRESET:-p4}
+      CUDA_IQ_PRB: ${CUDA_IQ_PRB:-106}
+      CUDA_IQ_SYMBOLS: ${CUDA_IQ_SYMBOLS:-14}
+      CUDA_IQ_USE_FIFO: ${CUDA_IQ_USE_FIFO:-0}
+      CUDA_IQ_FIFO_PATH: ${CUDA_IQ_FIFO_PATH:-/tmp/resgrid_iq.fifo}
+      CUDA_IQ_GEN_FPS: ${CUDA_IQ_GEN_FPS:-200}
+      # resgrid_plotter: last | mean | ffmpeg (default here: mean).
+      CUDA_ENCODE_POLICY: ${CUDA_ENCODE_POLICY:-mean}
+      CUDA_SLOT_USE_FIFO: ${CUDA_SLOT_USE_FIFO:-0}
+      CUDA_SLOT_FIFO_PATH: ${CUDA_SLOT_FIFO_PATH:-/tmp/resgrid_slot.fifo}
+      RESGRID_FIFO_CHOWN: ${RESGRID_FIFO_CHOWN:-}
+      RESGRID_FIFO_CHOWN_DISABLE: ${RESGRID_FIFO_CHOWN_DISABLE:-0}
+      RESGRID_CAPTURER_DIR: ${RESGRID_CAPTURER_DIR:-/encoder-snaps}
+      MTX_PUBLIC_HTTP_BASE: ${MTX_PUBLIC_HTTP_BASE:-http://localhost:8888}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      LOG_FILE: ${LOG_FILE:-/app/logs/server.log}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_MAX_BYTES: ${LOG_MAX_BYTES:-5000000}
+      LOG_BACKUP_COUNT: ${LOG_BACKUP_COUNT:-3}
+      LOG_ROTATE_WHEN: ${LOG_ROTATE_WHEN:-}
+      LOG_ROTATE_INTERVAL: ${LOG_ROTATE_INTERVAL:-1}
+      LOG_ROTATE_UTC: ${LOG_ROTATE_UTC:-0}
+    depends_on:
+      mediamtx:
+        condition: service_started
+    ports:
+      - "8081:8081"
+    volumes:
+      # resouce-grid/host-tmp → container /tmp (relative to this compose file). Same mount path on OAI gNB
+      # (nws/docker-compose.oai*.yaml) uses RESGRID_SLOT_FIFO_PATH_DL/UL to match dlul plotters when applicable.
+      - ${RESGRID_HOST_TMP:-./host-tmp}:/tmp
+      - ${RESGRID_HOST_CAPTURER_SNAPS:-./encoder-snaps}:/encoder-snaps
+      - ./backend/app:/app/app
+      - ./backend/scripts:/app/scripts
+      - ./backend/logs:/app/logs
+    command:
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8081"
+      - --reload
+      - --reload-dir
+      - /app/app
+    develop:
+      watch:
+        - action: rebuild
+          path: ./backend/Dockerfile
+        - action: rebuild
+          path: ./backend/requirements.txt
+        - action: rebuild
+          path: ./backend/resouce-grid-plotter/CMakeLists.txt
+        - action: rebuild
+          path: ./backend/resouce-grid-plotter/src
+        - action: rebuild
+          path: ./backend/resouce-grid-plotter/include/plotter_common.cuh
+        - action: rebuild
+          path: ./backend/resouce-grid-plotter/include/viridis_lut.inc
+
+  frontend:
+    # Distinct name avoids reusing an image built earlier from frontend/Dockerfile (nginx).
+    image: resouce-grid-frontend-vite
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    deploy:
+      resources:
+        limits:
+          memory: 8g
+    memswap_limit: 8g
+    # LL-HLS uses only TCP :8888 — reliable on LAN. Override with VITE_PLAYBACK_MODE=webrtc for WHEP.
+    environment:
+      VITE_PLAYBACK_MODE: ${VITE_PLAYBACK_MODE:-hls}
+      VITE_API_RELATIVE: "1"
+      VITE_DEV_PROXY_TARGET: http://backend:8081
+      # Optional GUI layout: VITE_GUI_COMBINE=1 forces one column; VITE_GUI_DLUL=1 forces two (needs both API bases).
+      VITE_GUI_COMBINE: ${VITE_GUI_COMBINE:-}
+      VITE_GUI_DLUL: ${VITE_GUI_DLUL:-}
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - resgrid_frontend_node_modules:/app/node_modules
+    depends_on:
+      - mediamtx
+      - backend
+    develop:
+      watch:
+        - action: rebuild
+          path: ./frontend/Dockerfile.dev
+        - action: rebuild
+          path: ./frontend/package.json
+        - action: rebuild
+          path: ./frontend/package-lock.json
+
+volumes:
+  resgrid_frontend_node_modules:

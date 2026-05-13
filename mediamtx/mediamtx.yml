@@ -1,0 +1,29 @@
+logLevel: info
+
+rtspAddress: :8554
+hlsAddress: :8888
+webrtcAddress: :8889
+
+# Low-latency HLS (fallback when not using WebRTC). Short segments need frequent IDRs — see backend FFmpeg -g/-keyint_min.
+hlsVariant: lowLatency
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsSegmentCount: 7
+hlsAllowOrigins: ["*"]
+webrtcAllowOrigins: ["*"]
+
+# ICE mux: UDP + TCP on 8189 so browsers can connect when either path works (Docker maps both in compose).
+# WHEP signaling stays on 8889/tcp. Prefer LL-HLS (port 8888) for simplest LAN viewing — see frontend default in compose.
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: :8189
+# Extra time when debugging ICE; fix the root cause with additionalHosts + firewall (see below).
+webrtcHandshakeTimeout: 30s
+
+# Gather ICE candidates from container interfaces (172.x). Works for same-host / quick starts with no .env.
+# For WebRTC from *other* LAN devices also set MTX_WEBRTC_ADDITIONAL_HOSTS in .env (server IP as clients reach it)
+# so browsers get a routable host candidate; open TCP+UDP 8189 for WebRTC. Default UI uses LL-HLS (?playback=webrtc for WHEP).
+webrtcIPsFromInterfaces: true
+
+paths:
+  live:
+

@@ -1,0 +1,24 @@
+logLevel: info
+
+rtspAddress: :8554
+hlsAddress: :8888
+webrtcAddress: :8889
+
+# Low-latency HLS (fallback when not using WebRTC). Short segments need frequent IDRs — see backend FFmpeg -g/-keyint_min.
+hlsVariant: lowLatency
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsSegmentCount: 7
+hlsAllowOrigins: ["*"]
+webrtcAllowOrigins: ["*"]
+
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: :8189
+webrtcHandshakeTimeout: 30s
+
+webrtcIPsFromInterfaces: true
+
+# Used by docker-compose.dlul.yaml: DL backend publishes to live_dl, UL to live_ul.
+paths:
+  live_dl:
+  live_ul:

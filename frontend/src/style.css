@@ -1,0 +1,1140 @@
+:root {
+  font-family:
+    system-ui,
+    -apple-system,
+    Segoe UI,
+    Roboto,
+    sans-serif;
+  background: #0f1115;
+  color: #e8eaed;
+  /* Shared horizontal inset so toolbar, cards, and expando bodies line up */
+  --rg-edge: 0.55rem;
+  --rg-stack-gap: 0.5rem;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body:has(.rg-media-card [data-role="video-axes"][data-iq-visible="true"]) .rg-app__toolbar {
+  padding-block: 0.35rem;
+}
+
+#app.rg-app {
+  height: 100%;
+  max-width: 100%;
+  margin: 0;
+  min-width: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#app .hint {
+  overflow-wrap: anywhere;
+  max-width: 100%;
+  margin: 0.5rem 0 0;
+}
+
+.rg-app__toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem 1rem;
+  padding: 0.5rem var(--rg-edge);
+  border-bottom: 1px solid #2d333d;
+  background: #12141a;
+  min-width: 0;
+}
+
+.rg-app__title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: 0;
+  color: #e8eaed;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.rg-app__hint {
+  margin: 0;
+  min-width: 0;
+  font-size: 0.82rem;
+  color: #9aa0a6;
+}
+
+.rg-app__hint > summary {
+  cursor: pointer;
+  color: #8ab4f8;
+  list-style: none;
+}
+
+.rg-app__hint > summary::-webkit-details-marker {
+  display: none;
+}
+
+.rg-dashboard {
+  flex: 1 1 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(17rem, min(28vw, 26rem));
+  grid-template-rows: minmax(0, 1fr);
+  gap: var(--rg-stack-gap) 0.6rem;
+  padding: var(--rg-stack-gap) var(--rg-edge) 0.55rem;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.rg-dashboard__media {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--rg-stack-gap);
+  overflow: hidden;
+}
+
+/* Dual DL + UL: two resource-grid streams beside each other, not stacked */
+.rg-app--dual .rg-dashboard__media {
+  flex-direction: row;
+  align-items: stretch;
+}
+
+.rg-dashboard__side {
+  min-width: 0;
+  min-height: 0;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--rg-stack-gap);
+  overflow-x: hidden;
+  /* Primary scroll: avoids <details> + flex children collapsing to 0 height (hidden buttons) */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.rg-media-card {
+  container-type: inline-size;
+  container-name: rg-media;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid #2d333d;
+  border-radius: 10px;
+  padding: 0.5rem var(--rg-edge) 0.55rem;
+  background: #12141a;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.rg-app--dual .rg-media-card {
+  flex: 1 1 0;
+}
+
+/* One outer box per stream (DL / UL); inner sections are .rg-subexpando */
+.rg-stream-box {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid #2d333d;
+  border-radius: 10px;
+  background: #12141a;
+  overflow: hidden;
+}
+
+.rg-stream-box__head.rg-panel-headrow {
+  margin: 0;
+  flex-shrink: 0;
+  padding: 0.5rem var(--rg-edge);
+  border-bottom: 1px solid #2d333d;
+  background: #161a22;
+}
+
+.rg-subexpando {
+  border-top: 1px solid #2a3038;
+}
+
+/* Header already has a bottom rule — avoid a double line above the first section */
+.rg-stream-box > details.rg-subexpando:first-of-type {
+  border-top: none;
+}
+
+.rg-subexpando__summary {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.45rem var(--rg-edge);
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #bdc1c6;
+  background: #151820;
+  user-select: none;
+}
+
+.rg-subexpando__summary::-webkit-details-marker {
+  display: none;
+}
+
+.rg-subexpando__summary::before {
+  content: "";
+  width: 0.4rem;
+  height: 0.4rem;
+  border-right: 2px solid #8ab4f8;
+  border-bottom: 2px solid #8ab4f8;
+  transform: rotate(-45deg);
+  transition: transform 0.12s ease;
+  flex-shrink: 0;
+}
+
+.rg-subexpando[open] > .rg-subexpando__summary::before {
+  transform: rotate(45deg);
+  margin-top: -0.1rem;
+}
+
+.rg-subexpando__body {
+  padding: 0.5rem var(--rg-edge) 0.6rem;
+  background: #12141a;
+  border-top: 1px solid #2a3038;
+}
+
+/* Flush last block to expando bottom — avoids extra band under Controls / Configuration */
+.rg-subexpando__body > *:last-child {
+  margin-bottom: 0;
+}
+
+.rg-panel-headrow {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.5rem 0.85rem;
+  margin: 0 0 0.55rem;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.rg-panel-headrow .rg-panel-heading {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0;
+  color: #bdc1c6;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.rg-panel-headrow .rg-panel-meta {
+  margin: 0;
+  font-size: 0.82rem;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.rg-panel-headrow .rg-panel-meta a {
+  color: #8ab4f8;
+}
+
+.rg-panel-headrow .playback-status {
+  margin: 0;
+  min-width: 0;
+  flex: 1 1 0%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layout-media {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow-x: clip;
+  overflow-y: hidden;
+}
+
+.layout-media--solo {
+  max-height: none;
+  /* Size queries so IQ plot can cap to this column’s width and height */
+  container-type: size;
+  container-name: solo-media;
+}
+
+/* Fill the media column: gives the figure a definite block-size so 16:9 / IQ grids lay out reliably */
+.layout-media--solo .video-figure {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  align-self: stretch;
+  overflow: hidden;
+}
+
+.video-figure {
+  margin: 0;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  /* Prevent video / IQ grid from painting past the layout column */
+  overflow-x: clip;
+  overflow-y: visible;
+}
+
+/*
+ * IQ: do not set flex:0 on the figure — same as synthetic, the axes grid is shrink-wrapped inside the figure;
+ * the figure must use flex:1 1 0 from .layout-media--solo .video-figure so extra column height isn’t stuck at flex-start.
+ */
+.layout-media--solo .video-figure:has([data-role="video-axes"][data-iq-visible="true"]) {
+  align-items: stretch;
+  justify-content: center;
+}
+
+/*
+ * Synthetic: do not set flex:0 here — it beat .layout-media--solo .video-figure { flex:1 1 0 } and kept the
+ * figure content-height, so the 16:9 plot sat at the top of the column. Keep justify-content only.
+ */
+.video-figure:not(:has([data-role="video-axes"][data-iq-visible="true"])) {
+  justify-content: center;
+}
+
+.iq-legend {
+  margin-top: var(--rg-stack-gap);
+  padding: 0.55rem 0.6rem;
+  background: #171a20;
+  border: 1px solid #2d333d;
+  border-radius: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  align-self: stretch;
+}
+
+.iq-legend-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem 1rem;
+  align-items: start;
+}
+
+.iq-legend-col-title {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: #9aa0a6;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.35rem;
+}
+
+.iq-legend-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.85rem;
+  align-items: center;
+  justify-content: center;
+}
+
+.iq-legend-list--col {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 0.35rem;
+}
+
+/* DL column: whole stack centered in grid cell; rows stay left-aligned (swatch column lines up). */
+.iq-legend-col--dl {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.iq-legend-col--dl .iq-legend-col-title {
+  align-self: center;
+  text-align: center;
+}
+
+.iq-legend-col--dl ul.iq-legend-list.iq-legend-list--col {
+  align-items: flex-start;
+  width: max-content;
+  max-width: 100%;
+}
+
+.iq-legend-col--dl .iq-legend-item {
+  justify-content: flex-start;
+}
+
+/* UL column: same as DL — centered block, left-aligned rows. */
+.iq-legend-col--ul {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.iq-legend-col--ul .iq-legend-col-title {
+  align-self: center;
+  text-align: center;
+}
+
+.iq-legend-col--ul ul.iq-legend-list.iq-legend-list--col {
+  align-items: flex-start;
+  width: max-content;
+  max-width: 100%;
+}
+
+.iq-legend-col--ul .iq-legend-item {
+  justify-content: flex-start;
+}
+
+.iq-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  color: #e8eaed;
+}
+
+.iq-legend-label {
+  min-width: 0;
+}
+
+.iq-legend-swatch {
+  width: 0.9rem;
+  height: 0.9rem;
+  border-radius: 3px;
+  flex-shrink: 0;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-sizing: border-box;
+}
+
+.iq-legend-notes {
+  margin-top: 0.55rem;
+  font-size: 0.68rem;
+  line-height: 1.4;
+  color: #7c838a;
+}
+
+.iq-legend-notes p {
+  margin: 0.35rem 0 0;
+}
+
+.iq-legend-notes p:first-child {
+  margin-top: 0;
+}
+
+.iq-legend-error-msg {
+  margin: 0;
+  font-size: 0.74rem;
+  line-height: 1.4;
+  color: #f2a8a8;
+}
+
+.video-axes {
+  display: grid;
+  grid-template-columns: 2.5rem minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 0.35rem 0.55rem;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.video-axes[data-iq-visible="true"] {
+  /*
+   * Cap plot width to this grid’s own width (not vmin alone — vmin can exceed a narrow .layout column).
+   * 3.5rem ≈ tick column + column-gap; keeps the video column inside .video-figure.
+   */
+  --iq-plot-size: min(
+    calc(100% - 3.5rem),
+    min(92vmin, calc(100vh - 11rem))
+  );
+  /* One shared column width: ticks + label edges align with video pixels. */
+  grid-template-columns: 2.5rem minmax(0, var(--iq-plot-size));
+  grid-template-rows: auto auto auto;
+  align-content: center;
+  /* Full-width container; plot + tick column centered when narrower than the card */
+  justify-content: center;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  /* No vertical gutter between title / frame / ticks (removes visible top & bottom bands). */
+  row-gap: 0;
+  column-gap: 0.5rem;
+  /* Shrink-wrapped height from rows; flex:1 on grid broke row sizing / video in some layouts */
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+.video-axes[data-iq-visible="false"] .va-corner,
+.video-axes[data-iq-visible="false"] .va-axis-top,
+.video-axes[data-iq-visible="false"] .va-symbol-col,
+.video-axes[data-iq-visible="false"] .va-spacer,
+.video-axes[data-iq-visible="false"] .va-axis-bottom {
+  display: none;
+}
+
+/* PRB caption sits under the tick column (row 3). */
+.video-axes[data-iq-visible="true"] .va-spacer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 0 0.2rem 0 0;
+  box-sizing: border-box;
+}
+
+/* Synthetic video (non-IQ): 16:9 box sized to the column; cap height on tall viewports. */
+.video-axes[data-iq-visible="false"] {
+  flex: 0 0 auto;
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+  width: 100%;
+  max-width: 100%;
+  aspect-ratio: 16 / 9;
+  max-height: min(72vh, calc(100vh - 14rem));
+  overflow: hidden;
+}
+
+.layout-media--solo .video-axes[data-iq-visible="false"] {
+  flex: 0 0 auto;
+  width: 100%;
+  min-height: 0;
+  /* Omit 100%: indefinite parent height can clamp max-height to 0 and hide the video */
+  max-height: min(72vh, calc(100vh - 14rem));
+}
+
+@supports (width: 1cqi) {
+  .rg-media-card .video-axes[data-iq-visible="true"] {
+    --iq-plot-size: min(
+      calc(100% - 3.5rem),
+      100cqi - 3.5rem,
+      92vmin,
+      calc(100vh - 11rem)
+    );
+  }
+
+  /* Solo media column: cap square to column height as well as width (avoids vmin overflow).
+   * Guard cqh: before layout / zero block-size, 100cqh can be 0 → negative calc broke --iq-plot-size and hid video. */
+  .layout-media--solo .video-axes[data-iq-visible="true"] {
+    --iq-plot-size: max(
+      1px,
+      min(
+        calc(100% - 3.5rem),
+        100cqi - 3.5rem,
+        max(0px, calc(100cqh - 5rem)),
+        92vmin,
+        calc(100vh - 11rem)
+      )
+    );
+  }
+}
+
+.video-axes[data-iq-visible="false"] .va-video-wrap {
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  min-height: 0;
+  height: 100%;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.va-corner {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.va-axis-top {
+  grid-column: 2;
+  grid-row: 1;
+  text-align: center;
+  font-size: 0.72rem;
+  color: #9aa0a6;
+  line-height: 1.35;
+}
+
+/* Top label and bottom ticks span the same width as the video (grid column 2). */
+.video-axes[data-iq-visible="true"] .va-axis-top {
+  width: 100%;
+  max-width: 100%;
+  justify-self: stretch;
+  margin-inline: 0;
+  margin-block: 0;
+  padding: 0;
+  line-height: 1.2;
+  box-sizing: border-box;
+}
+
+.va-axis-title {
+  font-weight: 600;
+  color: #bdc1c6;
+  margin-right: 0.35rem;
+}
+
+.va-axis-hint {
+  opacity: 0.85;
+}
+
+.va-symbol-col {
+  grid-column: 1;
+  grid-row: 2;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0 0.2rem 0 0;
+}
+
+.video-axes[data-iq-visible="true"] .va-symbol-col {
+  /* Row height follows the square video; ticks span the same vertical extent as the frame. */
+  align-self: stretch;
+  height: auto;
+  min-height: 0;
+}
+
+.va-symbol-ticks {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  font-size: 0.65rem;
+  color: #9aa0a6;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Match plotter: PRB 0 at bottom of heatmap; tick list is ascending indices top→bottom in DOM — reverse to align. */
+.video-axes[data-iq-visible="true"] .va-symbol-ticks {
+  flex-direction: column-reverse;
+}
+
+.va-spacer .va-axis-end {
+  font-size: 0.58rem;
+  color: #7c838a;
+  line-height: 1.2;
+  text-align: right;
+}
+
+.va-video-wrap {
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/*
+ * IQ frames are square (1:1). Wrapper stays square on the grid; flex centers the <video>
+ * when letterboxed (object-fit: contain) inside the cell.
+ */
+.video-axes[data-iq-visible="true"] .va-video-wrap {
+  width: 100%;
+  max-width: 100%;
+  aspect-ratio: 1 / 1;
+  align-self: stretch;
+  margin-inline: 0;
+  justify-self: stretch;
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+}
+
+.va-spacer {
+  grid-column: 1;
+  grid-row: 3;
+}
+
+.va-axis-bottom {
+  grid-column: 2;
+  grid-row: 3;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.25rem;
+  font-size: 0.65rem;
+  color: #9aa0a6;
+  font-variant-numeric: tabular-nums;
+  padding: 0 0.05rem;
+}
+
+.video-axes[data-iq-visible="true"] .va-axis-bottom {
+  width: 100%;
+  max-width: 100%;
+  justify-self: stretch;
+  margin-inline: 0;
+  margin-block: 0;
+  box-sizing: border-box;
+  padding: 0;
+  line-height: 1.2;
+  display: grid;
+  justify-items: center;
+  align-items: start;
+  gap: 0;
+  /* grid-template-columns: repeat(nSym, minmax(0, 1fr)) set in JS */
+}
+
+.video-axes[data-iq-visible="true"] .va-axis-bottom span {
+  min-width: 0;
+  text-align: center;
+}
+
+.va-axis-bottom span {
+  flex: 0 0 auto;
+}
+
+/* Legacy layout (unused in stream box); kept for compatibility */
+.control-split {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+  align-items: start;
+}
+
+.control-split-col {
+  min-width: 0;
+}
+
+.control-split-col--status {
+  padding-inline-end: 0;
+}
+
+.control-split-col--config {
+  border-inline-start: none;
+  border-block-start: 1px solid #2d333d;
+  padding-inline-start: 0;
+  padding-block-start: 1rem;
+  margin-block-start: 0.75rem;
+}
+
+.panel-status-meta {
+  margin: -0.35rem 0 0.75rem;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: #7c838a;
+}
+
+.panel-status .status-dl {
+  margin-bottom: 0;
+}
+
+@media (max-width: 960px) {
+  .rg-dashboard {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) minmax(0, 42vh);
+  }
+
+  .rg-dashboard__side {
+    flex-direction: row;
+    align-items: stretch;
+    gap: var(--rg-stack-gap);
+    overflow-x: auto;
+    overflow-y: auto;
+    min-height: 0;
+    max-height: 100%;
+  }
+
+  .rg-stream-box {
+    flex: 0 0 auto;
+    min-width: min(100%, 12rem);
+    max-width: 100%;
+  }
+}
+
+.panel {
+  background: #171a20;
+  border: 1px solid #2d333d;
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.panel-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 0 0 0.75rem;
+  color: #bdc1c6;
+}
+
+.status-dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.35rem 1rem;
+  margin: 0 0 1rem;
+  font-size: 0.875rem;
+  align-items: first baseline;
+}
+
+.status-dl dt {
+  margin: 0;
+  color: #7c838a;
+}
+
+.status-dl dd {
+  margin: 0;
+  color: #e8eaed;
+  word-break: break-all;
+}
+
+.status-dl dd.panel-status-pipeline--active {
+  align-self: start;
+}
+
+.panel-status-pipeline {
+  margin: 0;
+  min-height: 1.25rem;
+}
+
+.panel-status-pipeline--active {
+  margin-top: 0.15rem;
+  word-break: normal;
+}
+
+.pipeline-stages-placeholder {
+  color: #7c838a;
+}
+
+.pipeline-stages {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.pipeline-block {
+  padding: 0.4rem 0.5rem 0.45rem;
+  background: linear-gradient(145deg, rgba(138, 180, 248, 0.08), rgba(30, 34, 42, 0.92));
+  border: 1px solid rgba(138, 180, 248, 0.18);
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22);
+}
+
+.pipeline-block__title {
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #8ab4f8;
+  margin-bottom: 0.35rem;
+  opacity: 0.95;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pipeline-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+}
+
+.pipeline-row--single {
+  grid-template-columns: 1fr;
+}
+
+@media (max-width: 420px) {
+  .pipeline-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.pipeline-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  padding: 0.32rem 0.4rem;
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  min-width: 0;
+}
+
+.pipeline-metric__label {
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: #9aa0a6;
+  line-height: 1.2;
+}
+
+.pipeline-metric__value {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.88rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #e8eaed;
+  letter-spacing: -0.02em;
+}
+
+/* Hoist dt/dd into .status-dl grid so one pair can be toggled without breaking columns. */
+.status-dl-group {
+  display: contents;
+}
+
+.control-group {
+  margin: 0 0 0.85rem;
+  padding: 0.55rem 0.6rem;
+  background: #161a22;
+  border: 1px solid #2d333d;
+  border-radius: 8px;
+  font-size: 0.82rem;
+}
+
+.control-group-title {
+  margin: 0 0 0.45rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #bdc1c6;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.control-group-desc {
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: #7c838a;
+}
+
+.control-group-desc code {
+  font-size: 0.68rem;
+  color: #9aa0a6;
+}
+
+.control-group .toolbar {
+  margin-top: 0;
+}
+
+.iq-cfg {
+  margin: 0 0 0.85rem;
+  padding: 0.55rem 0.6rem;
+  background: #1a1f28;
+  border: 1px solid #2d333d;
+  border-radius: 8px;
+  font-size: 0.82rem;
+}
+
+.iq-cfg-label {
+  display: block;
+  margin-bottom: 0.4rem;
+  color: #bdc1c6;
+  font-weight: 500;
+}
+
+.iq-cfg-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.iq-cfg-input {
+  width: 5.5rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid #3c4043;
+  background: #0f1115;
+  color: #e8eaed;
+  font-size: 0.875rem;
+}
+
+select.iq-cfg-input {
+  width: auto;
+  min-width: 10rem;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.5rem;
+  align-items: center;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.btn {
+  font: inherit;
+  font-size: 0.875rem;
+  padding: 0.45rem 0.95rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.125rem;
+  box-sizing: border-box;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: #1a73e8;
+  color: #fff;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #1967d2;
+}
+
+.btn-danger {
+  background: #3c1f1f;
+  color: #f2b8b5;
+  border-color: #8c1d18;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #5c2220;
+}
+
+.btn-secondary {
+  background: transparent;
+  color: #8ab4f8;
+  border-color: #3c4043;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: #282c34;
+}
+
+.playback-status {
+  margin: 0;
+  color: #9aa0a6;
+  font-size: 0.9rem;
+}
+
+.hint {
+  margin: 0 0 1rem;
+  color: #7c838a;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.hint code {
+  font-size: 0.8rem;
+  color: #bdc1c6;
+}
+
+.hint a {
+  color: #8ab4f8;
+}
+
+.va-video-wrap video {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  max-height: 100%;
+  background: #000;
+  border-radius: 8px;
+  object-fit: cover;
+  object-position: center;
+}
+
+.video-axes[data-iq-visible="true"] .va-video-wrap video {
+  max-width: 100%;
+  max-height: none;
+  border-radius: 0;
+  object-fit: contain;
+  object-position: center;
+}
+
+/* Letterbox inside the 16:9 cell if max-height clamps the box narrower than native stream AR. */
+.video-axes[data-iq-visible="false"] .va-video-wrap video {
+  object-fit: contain;
+}
+
+.mode-fieldset {
+  border: 1px solid #2d333d;
+  border-radius: 8px;
+  padding: 0.55rem 0.6rem;
+  margin: 0 0 0.85rem;
+}
+
+.mode-legend {
+  padding: 0 0.35rem;
+  font-size: 0.8rem;
+  color: #9aa0a6;
+}
+
+.mode-label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  margin: 0.35rem 0;
+  cursor: pointer;
+}
+
+.mode-num {
+  display: inline-block;
+  min-width: 1.15rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #8ab4f8;
+  font-variant-numeric: tabular-nums;
+}
+
+.mode-macro {
+  font-family: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #e8eaed;
+  letter-spacing: 0.02em;
+}
+
+.capturer-progress-stack {  margin-top: 0.5rem;
+}
+
+.capturer-progress-label {  display: block;
+  margin: 0.35rem 0 0.15rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #bdc1c6;
+}
+
+.capturer-progress-stack .capturer-progress:first-of-type {  margin-top: 0;
+}
+
+.capturer-progress {  display: block;
+  width: 100%;
+  height: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.capturer-status {  margin: 0.35rem 0 0;
+  font-size: 0.78rem;
+  color: #9aa0a6;
+  word-break: break-all;
+}

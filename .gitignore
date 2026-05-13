@@ -1,0 +1,43 @@
+# Runtime bind-mount dirs (FIFOs, JPEG capturer output; see docker-compose*.yml)
+host-tmp/
+encoder-snaps/
+encoder-snaps-dl/
+encoder-snaps-ul/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# Env and secrets
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+
+
+logs

@@ -1,0 +1,242 @@
+# DL + UL stack (PRB 106) with resgrid_plotter --encode-policy ffmpeg on both backends:
+# every rendered RGBA frame is written to FFmpeg rawvideo at --fps (capped 600); FFmpeg -vf fps=CUDA_IQ_FPS then NVENC (~24 Hz RTSP).
+# MediaMTX (live_dl / live_ul) + two FastAPI backends (:8081 DL, :8082 UL) + Vite frontend. See docs/PLOTTER_PIPELINE.md §7.3.
+# Run from this directory:
+#   docker compose -f docker-compose.dlul.bw106.encodffmpeg.yaml up
+# Watch:
+#   docker compose -f docker-compose.dlul.bw106.encodffmpeg.yaml watch
+#
+# LAN: http://<host-ip>:5173 — open TCP 5173,8081,8082,8888,8889 (and 8189 tcp+udp for ?playback=webrtc).
+# WebRTC: set MTX_WEBRTC_ADDITIONAL_HOSTS to this server's LAN IP in .env.
+# GPU: same requirements as docker-compose.yml (NVIDIA Container Toolkit). CPU-only: remove deploy under both backends, set VIDEO_ENCODER=cpu.
+# No container swap: `memswap_limit` must equal `memory` — Docker’s total cap is RAM+swap; equal values ⇒ swap room is 0 (not “8g of swap”).
+#
+# FIFO defaults are direction-specific (under /tmp in container; bind RESGRID_HOST_TMP like the single-backend compose).
+# File capturer (JPEG): RESGRID_HOST_CAPTURER_SNAPS_{DL,UL} → /encoder-snaps (default ./encoder-snaps-dl, ./encoder-snaps-ul).
+
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    memswap_limit: 512m
+    environment:
+      MTX_WEBRTCADDITIONALHOSTS: ${MTX_WEBRTC_ADDITIONAL_HOSTS:-}
+    volumes:
+      - ./mediamtx/mediamtx.dlul.yml:/mediamtx.yml:ro
+    ports:
+      - "8554:8554"
+      - "8888:8888"
+      - "8889:8889"
+      - "8189:8189/tcp"
+      - "8189:8189/udp"
+
+  backend-dl:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    deploy:
+      resources:
+        limits:
+          memory: 32g
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    memswap_limit: 32g
+    entrypoint:
+      - uvicorn
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,video,utility}
+      MTX_RTSP_URL: rtsp://mediamtx:8554/live_dl
+      MTX_WAIT_HOST: mediamtx
+      MTX_WAIT_PORT: "8554"
+      AUTO_START: ${AUTO_START:-1}
+      CUDA_AUTO_START_IQ_GENERATOR: ${CUDA_AUTO_START_IQ_GENERATOR:-0}
+      STREAM_MODE: ${STREAM_MODE:-SYNTHETIC_CHANNEL_BASED}
+      VIDEO_ENCODER: ${VIDEO_ENCODER:-nvenc}
+      CUDA_IQ_FPS: ${CUDA_IQ_FPS:-24}
+      CUDA_IQ_CELL_PIXELS: ${CUDA_IQ_CELL_PIXELS:-6}
+      CUDA_IQ_PRESET: ${CUDA_IQ_PRESET:-p4}
+      CUDA_IQ_PRB: ${CUDA_IQ_PRB:-106}
+      CUDA_IQ_SYMBOLS: ${CUDA_IQ_SYMBOLS:-14}
+      CUDA_IQ_USE_FIFO: ${CUDA_IQ_USE_FIFO:-0}
+      CUDA_IQ_FIFO_PATH: ${CUDA_IQ_FIFO_PATH_DL:-/tmp/resgrid_iq_dl.fifo}
+      CUDA_IQ_GEN_FPS: ${CUDA_IQ_GEN_FPS:-200}
+      CUDA_ENCODE_POLICY: ${CUDA_ENCODE_POLICY:-ffmpeg}
+      CUDA_SLOT_USE_FIFO: ${CUDA_SLOT_USE_FIFO:-0}
+      CUDA_SLOT_FIFO_PATH: ${CUDA_SLOT_FIFO_PATH_DL:-/tmp/resgrid_slot_dl.fifo}
+      RESGRID_FIFO_CHOWN: ${RESGRID_FIFO_CHOWN:-}
+      RESGRID_FIFO_CHOWN_DISABLE: ${RESGRID_FIFO_CHOWN_DISABLE:-0}
+      RESGRID_CAPTURER_DIR: ${RESGRID_CAPTURER_DIR_DL:-/encoder-snaps}
+      MTX_PUBLIC_HTTP_BASE: ${MTX_PUBLIC_HTTP_BASE:-http://localhost:8888}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      LOG_FILE: ${LOG_FILE_DL:-/app/logs/server_dl.log}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_MAX_BYTES: ${LOG_MAX_BYTES:-5000000}
+      LOG_BACKUP_COUNT: ${LOG_BACKUP_COUNT:-3}
+      LOG_ROTATE_WHEN: ${LOG_ROTATE_WHEN:-}
+      LOG_ROTATE_INTERVAL: ${LOG_ROTATE_INTERVAL:-1}
+      LOG_ROTATE_UTC: ${LOG_ROTATE_UTC:-0}
+    depends_on:
+      mediamtx:
+        condition: service_started
+    ports:
+      - "8081:8081"
+    volumes:
+      - ${RESGRID_HOST_TMP:-./host-tmp}:/tmp
+      - ${RESGRID_HOST_CAPTURER_SNAPS_DL:-./encoder-snaps-dl}:/encoder-snaps
+      - ./backend/app:/app/app
+      - ./backend/scripts:/app/scripts
+      - ./backend/logs:/app/logs
+    command:
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8081"
+      - --reload
+      - --reload-dir
+      - /app/app
+    develop:
+      watch:
+        - action: rebuild
+          path: ./backend/Dockerfile
+        - action: rebuild
+          path: ./backend/requirements.txt
+        - action: rebuild
+          path: ./backend/resouce-grid-plotter/CMakeLists.txt
+        - action: rebuild
+          path: ./backend/resouce-grid-plotter/src
+        - action: rebuild
+          path: ./backend/resouce-grid-plotter/include/plotter_common.cuh
+        - action: rebuild
+          path: ./backend/resouce-grid-plotter/include/viridis_lut.inc
+
+  backend-ul:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    deploy:
+      resources:
+        limits:
+          memory: 32g
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    memswap_limit: 32g
+    entrypoint:
+      - uvicorn
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,video,utility}
+      MTX_RTSP_URL: rtsp://mediamtx:8554/live_ul
+      MTX_WAIT_HOST: mediamtx
+      MTX_WAIT_PORT: "8554"
+      AUTO_START: ${AUTO_START:-1}
+      CUDA_AUTO_START_IQ_GENERATOR: ${CUDA_AUTO_START_IQ_GENERATOR:-0}
+      STREAM_MODE: ${STREAM_MODE:-SYNTHETIC_CHANNEL_BASED}
+      VIDEO_ENCODER: ${VIDEO_ENCODER:-nvenc}
+      CUDA_IQ_FPS: ${CUDA_IQ_FPS:-24}
+      CUDA_IQ_CELL_PIXELS: ${CUDA_IQ_CELL_PIXELS:-6}
+      CUDA_IQ_PRESET: ${CUDA_IQ_PRESET:-p4}
+      CUDA_IQ_PRB: ${CUDA_IQ_PRB:-106}
+      CUDA_IQ_SYMBOLS: ${CUDA_IQ_SYMBOLS:-14}
+      CUDA_IQ_USE_FIFO: ${CUDA_IQ_USE_FIFO:-0}
+      CUDA_IQ_FIFO_PATH: ${CUDA_IQ_FIFO_PATH_UL:-/tmp/resgrid_iq_ul.fifo}
+      CUDA_IQ_GEN_FPS: ${CUDA_IQ_GEN_FPS:-200}
+      CUDA_ENCODE_POLICY: ${CUDA_ENCODE_POLICY:-ffmpeg}
+      CUDA_SLOT_USE_FIFO: ${CUDA_SLOT_USE_FIFO:-0}
+      CUDA_SLOT_FIFO_PATH: ${CUDA_SLOT_FIFO_PATH_UL:-/tmp/resgrid_slot_ul.fifo}
+      RESGRID_FIFO_CHOWN: ${RESGRID_FIFO_CHOWN:-}
+      RESGRID_FIFO_CHOWN_DISABLE: ${RESGRID_FIFO_CHOWN_DISABLE:-0}
+      RESGRID_CAPTURER_DIR: ${RESGRID_CAPTURER_DIR_UL:-/encoder-snaps}
+      MTX_PUBLIC_HTTP_BASE: ${MTX_PUBLIC_HTTP_BASE:-http://localhost:8888}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      LOG_FILE: ${LOG_FILE_UL:-/app/logs/server_ul.log}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_MAX_BYTES: ${LOG_MAX_BYTES:-5000000}
+      LOG_BACKUP_COUNT: ${LOG_BACKUP_COUNT:-3}
+      LOG_ROTATE_WHEN: ${LOG_ROTATE_WHEN:-}
+      LOG_ROTATE_INTERVAL: ${LOG_ROTATE_INTERVAL:-1}
+      LOG_ROTATE_UTC: ${LOG_ROTATE_UTC:-0}
+    depends_on:
+      mediamtx:
+        condition: service_started
+    ports:
+      - "8082:8081"
+    volumes:
+      - ${RESGRID_HOST_TMP:-./host-tmp}:/tmp
+      - ${RESGRID_HOST_CAPTURER_SNAPS_UL:-./encoder-snaps-ul}:/encoder-snaps
+      - ./backend/app:/app/app
+      - ./backend/scripts:/app/scripts
+      - ./backend/logs:/app/logs
+    command:
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8081"
+      - --reload
+      - --reload-dir
+      - /app/app
+    develop:
+      watch:
+        - action: rebuild
+          path: ./backend/Dockerfile
+        - action: rebuild
+          path: ./backend/requirements.txt
+        - action: rebuild
+          path: ./backend/resouce-grid-plotter/CMakeLists.txt
+        - action: rebuild
+          path: ./backend/resouce-grid-plotter/src
+        - action: rebuild
+          path: ./backend/resouce-grid-plotter/include/plotter_common.cuh
+        - action: rebuild
+          path: ./backend/resouce-grid-plotter/include/viridis_lut.inc
+
+  frontend:
+    image: resouce-grid-frontend-vite-dlul
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    deploy:
+      resources:
+        limits:
+          memory: 8g
+    memswap_limit: 8g
+    environment:
+      VITE_PLAYBACK_MODE: ${VITE_PLAYBACK_MODE:-hls}
+      VITE_API_RELATIVE: "0"
+      VITE_DEV_PROXY_TARGET: ""
+      VITE_API_BASE_DL: ${VITE_API_BASE_DL:-http://localhost:8081}
+      VITE_API_BASE_UL: ${VITE_API_BASE_UL:-http://localhost:8082}
+      # GUI: 1 = two columns (default for this stack). Set VITE_GUI_COMBINE=1 to force single column.
+      VITE_GUI_DLUL: ${VITE_GUI_DLUL:-1}
+      VITE_GUI_COMBINE: ${VITE_GUI_COMBINE:-}
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - resgrid_dlul_frontend_node_modules:/app/node_modules
+    depends_on:
+      - mediamtx
+      - backend-dl
+      - backend-ul
+    develop:
+      watch:
+        - action: rebuild
+          path: ./frontend/Dockerfile.dev
+        - action: rebuild
+          path: ./frontend/package.json
+        - action: rebuild
+          path: ./frontend/package-lock.json
+
+volumes:
+  resgrid_dlul_frontend_node_modules:
