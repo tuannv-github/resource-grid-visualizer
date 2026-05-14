@@ -21,7 +21,7 @@ import { renderIqAxes } from "../ui/iqAxes";
 import { renderIqChannelLegend, renderIqLegendError } from "../ui/iqLegend";
 import { mountModeSelect } from "../ui/modeSelect";
 
-/** One **SyntheticFifoWriterStatus** slice from **GET /api/generator/status**. */
+/** One **SyntheticMqWriterStatus** slice from **GET /api/generator/status**. */
 type FifoWriterSlice = {
   running: boolean;
   capable: boolean;
@@ -294,13 +294,13 @@ export class ResgridPanel {
     const pubModeFifo = queryRole<HTMLElement>(this.controlsRoot, "pub-mode-fifo-path");
     if (pubModeFifo) {
       if (uiMode === SYNTHETIC_IMAGES) {
-        const p = s.video_generator_fifo_path?.trim();
+        const p = s.video_generator_mq_path?.trim();
         pubModeFifo.textContent = p || "—";
       } else if (uiMode === SYNTHETIC_RESOURCE_GRID) {
-        const p = srg?.fifo_path?.trim();
+        const p = srg?.mq_path?.trim();
         pubModeFifo.textContent = p || "—";
       } else if (uiMode === SYNTHETIC_FAPI) {
-        const p = sfa?.fifo_path?.trim();
+        const p = sfa?.mq_path?.trim();
         pubModeFifo.textContent = p || "—";
       } else {
         pubModeFifo.textContent = "—";

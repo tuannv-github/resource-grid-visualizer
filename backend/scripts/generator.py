@@ -1,54 +1,20 @@
 #!/usr/bin/env python3
 """
-**generator.py** — Python FIFO producer for the resource grid stack: **full I/Q resource grids**
-(``--fifo-resource-grid``), **FAPI / slot** demo records (``--fifo-fapi``), and the same entry point for **image**
-frame feeds when the backend wires ``--fifo-images`` / related paths.
+**generator.py** — Python producer for the resource-grid stack over **POSIX message queues**:
+**full I/Q resource grids** (``--mq-resource-grid``), **FAPI / slot** demo records (``--mq-fapi``), and **raw RGBA**
+(``--mq-images``) for **resgrid_plotter**.
 
-Synthetic I/Q resource grid → named FIFO (raw float32, interleaved re, im per cell).
+Synthetic I/Q → chunked **mq** frames (raw float32, interleaved re, im per cell). See **``docs/CHANNEL_BASED_INTERFACE.md``**
+for slot-message layout; **``backend/plotter/readme.md``** for plotter **``--mq-*``** argv.
 
-Optional **FAPI / slot FIFO** (see ``docs/CHANNEL_BASED_INTERFACE.md``): pass ``--fifo-fapi`` (optional path; default ``/tmp/fapi.fifo`` when the flag is given alone, or ``CUDA_SLOT_FIFO_PATH`` from the environment) or ``--slot-fifo``, plus ``--slot-pattern``
-(``demo``, ``demo-multi``, ``symbol-columns``, or ``symbol-windows`` — ``symbol-windows`` / ``symbol-columns`` use
-**shape-only** slot messages: ``n_complex=0``, no I/Q bytes; PHY color is flat per ``channel`` in the plotter.
-``symbol-windows``: random PRB spans per symbol at startup (**``--slot-window-seed``**). **RNTI** is **random each slot**
-(per OFDM symbol) via **``--slot-rnti-seed``** (optional; default nondeterministic).)
-``--data-mode 3`` with no ``--fifo`` runs slot-only (same as ``--slot-only``).
-``--slot-only`` writes only the FAPI FIFO (no ``--fifo-resource-grid``).
+Optional **``--generator-shm``** (``--producer-shm``): 32-byte control block created by the FastAPI backend (measured Hz,
+command Hz, pattern id).
 
-Wire format (one "frame" per write cycle)
-    For each cell index i in [0, prb * symbols):
-        bytes[8*i : 8*i+4]   = real part (float32, little-endian)
-        bytes[8*i+4 : 8*i+8] = imag part (float32, little-endian)
-    Cell order matches resgrid_plotter / C++: row-major by symbol s then PRB p,
-    i.e. index i = s * prb + p with float2 at that slot (same layout NumPy builds here).
+Runtime: **``ResgridMqWriter``** opens each mq **O_WRONLY**; **``mq_send``** may block when the queue is full (backpressure).
 
-**``--fifo-images`` (raw RGBA video into the plotter)**
-    Each write is exactly **``rgba_width * rgba_height * 4``** bytes: top-to-bottom rows, each row **left-to-right**,
-    each pixel **R, G, B, A** as ``uint8`` (A is usually 255). Frame size must match the padded canvas computed by
-    ``resgrid_plotter`` for the same **``--prb`` / ``--symbols`` / ``--cell-pixels``** (see backend ``_plotter_padded_rgba_size``).
-    Pixels come from **FFmpeg lavfi** (``testsrc`` / ``smptebars`` / ``mandelbrot`` — same sizes as ``_LAVFI_SOURCE_PRESETS``
-    in ``backend/app/main.py``), **scaled** to the FIFO dimensions, or from **Python/NumPy** (``randomnoise`` — independent
-    random ``uint8`` RGB per pixel, A=255 at output size), then paced to the target Hz (SHM or ``--fps``).
+Default **``--prb``** follows env **``CUDA_IQ_PRB``** (same as **``resgrid_plotter``** in the same container).
 
-Runtime
-    The writer opens the FIFO O_WRONLY; on Linux this blocks until resgrid_plotter
-    opens the read end, so the backend can spawn CUDA first, then this process.
-    If CUDA_IQ_GEN_FPS > CUDA_IQ_FPS and the pipe fills, os.write blocks (backpressure).
-
-Default ``--prb`` (when omitted) follows env ``CUDA_IQ_PRB`` (same as the FastAPI backend / ``resgrid_plotter``), else 273.
-
-Optional ``--generator-shm`` (aliases ``--producer-shm``; IQ generator control block, 32 bytes; created by the backend)
-    Offset 0:  double — measured generation rate (Hz); this script updates ~once per second.
-    Offset 8:  double — commanded generation rate (Hz); backend/API writes; we read every
-               loop iteration to adjust pacing. Invalid/missing values fall back to --fps.
-    Offset 16: uint32 — synthetic pattern id (0…3); backend/API writes; we read each frame.
-    This process must not shm_unlink; only attach, mmap via SharedMemory, and close on exit.
-    ``multiprocessing.shared_memory.SharedMemory`` registers the segment with ``resource_tracker``; on process exit
-    the tracker would call ``shm_unlink`` and remove the backend-owned segment. We unregister after attach so only
-    the backend can unlink when the plotter stops.
-
-Debugging
-    ``--log-level INFO`` (default): stderr lines when pattern or commanded Hz changes, plus startup summary.
-    ``--log-level DEBUG``: also ~1 Hz lines with achieved fps, target Hz, and active pattern (confirms SHM updates).
+Debugging: **``--log-level INFO``** (default) or **``DEBUG``** for per-second pacing snapshots.
 """
 
 from __future__ import annotations
@@ -64,6 +30,8 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
+
 from multiprocessing import resource_tracker
 from multiprocessing import shared_memory
 
@@ -95,14 +63,19 @@ except ImportError as e:  # pragma: no cover
     print("generator: install numpy (e.g. pip install numpy)", file=sys.stderr)
     raise SystemExit(1) from e
 
+_backend_dir = Path(__file__).resolve().parents[1]
+if str(_backend_dir) not in sys.path:
+    sys.path.insert(0, str(_backend_dir))
+from app.resgrid_posix_mq import ResgridMqWriter
+
 # Must match IQ_PATTERN_MAX in backend main.py and plotter_common.cuh (`backend/plotter/`).
 _IQ_PATTERN_MAX = 3
 # Must match ``kResourceGridSlotIqMagic`` in ``backend/plotter/include/plotter_common.cuh``.
 RESOURCE_GRID_SLOT_IQ_MAGIC = 0x52474953
-# Default FAPI / slot named pipe (matches ``CUDA_SLOT_FIFO_PATH`` default in ``app.main``).
-_DEFAULT_FAPI_FIFO_PATH = (os.environ.get("CUDA_SLOT_FIFO_PATH") or "").strip() or "/tmp/fapi.fifo"
-_DEFAULT_RESOURCE_GRID_FIFO_PATH = (os.environ.get("CUDA_IQ_FIFO_PATH") or "").strip() or "/tmp/resource_grid.fifo"
-_DEFAULT_IMAGES_FIFO_PATH = (os.environ.get("RESGRID_FIFO_IMAGES") or "").strip() or "/tmp/images.fifo"
+# Default POSIX mq names (match ``app.main`` / ``resgrid_plotter`` defaults).
+_DEFAULT_FAPI_MQ_PATH = (os.environ.get("CUDA_SLOT_MQ_PATH") or "").strip() or "/resgrid_slot"
+_DEFAULT_RESOURCE_GRID_MQ_PATH = (os.environ.get("CUDA_IQ_MQ_PATH") or "").strip() or "/resgrid_iq"
+_DEFAULT_IMAGES_MQ_PATH = (os.environ.get("RESGRID_MQ_IMAGES") or "").strip() or "/resgrid_rgba"
 
 
 def _int_env(name: str, fallback: int) -> int:
@@ -325,7 +298,7 @@ def slot_payload_const(sym_count: int, prb_count: int, re: float, im: float) -> 
 
 
 def write_slot_frame(
-    fd: int, hdr: bytes, extension: bytes | None, payload: bytes
+    fd: ResgridMqWriter, hdr: bytes, extension: bytes | None, payload: bytes
 ) -> None:
     buf = hdr + (extension or b"") + payload
     _write_all(fd, buf)
@@ -351,7 +324,7 @@ def make_fixed_symbol_prb_windows(
 
 
 def write_slot_symbol_window_batch(
-    fd: int,
+    fd: ResgridMqWriter,
     prb: int,
     n_sym: int,
     slot_id: int,
@@ -378,7 +351,7 @@ def write_slot_symbol_window_batch(
 
 
 def write_slot_demo_record(
-    fd: int,
+    fd: ResgridMqWriter,
     prb: int,
     sym: int,
     slot_id: int,
@@ -471,7 +444,7 @@ def write_slot_demo_record(
 
 
 def run_slot_fifo_standalone(
-    fifo: str,
+    mq_name: str,
     prb: int,
     symbols: int,
     interval: float,
@@ -486,7 +459,7 @@ def run_slot_fifo_standalone(
     generator_shm: str | None = None,
     default_fps: int = 200,
 ) -> None:
-    """Standalone loop: slot FIFO only (no IQ writes).
+    """Standalone loop: slot / FAPI POSIX mq only (no IQ writes).
 
     If ``generator_shm`` is set, sleep between slot batches follows SHM offset 8 (commanded Hz) when finite,
     so REST GET/PUT ``/api/generator/fps`` drives slot rate; offset 0 gets measured slot-batch Hz (~1 Hz).
@@ -513,10 +486,8 @@ def run_slot_fifo_standalone(
             "slot-only: generator control SHM %r (command Hz @8 drives batch interval when set)",
             generator_shm,
         )
-    _LOG.info(
-        "opening slot fifo %r (blocks until resgrid_plotter opens read side)...", fifo
-    )
-    fd = os.open(fifo, os.O_WRONLY)
+    _LOG.info("opening slot POSIX mq %r...", mq_name)
+    fd = ResgridMqWriter(mq_name)
     interval_t0 = time.perf_counter()
     slots_in_interval = 0
     try:
@@ -548,7 +519,7 @@ def run_slot_fifo_standalone(
                     )
             except BrokenPipeError:
                 _LOG.info(
-                    "slot FIFO reader closed (e.g. resgrid_plotter/FFmpeg exited); stopping slot demo writer"
+                    "slot mq reader closed (e.g. resgrid_plotter exited); stopping slot demo writer"
                 )
                 break
             sleep_s = interval if interval > 0 else 1.0 / max(1, default_fps)
@@ -572,22 +543,23 @@ def run_slot_fifo_standalone(
     except KeyboardInterrupt:
         _LOG.info("exit")
     finally:
-        os.close(fd)
+        fd.close()
         if prod_shm is not None:
             prod_shm.close()
 
 
-def _write_all(fd: int, data: bytes) -> None:
-    """Write the full buffer to fd (pipes may return short writes; loop until done)."""
-    mv = memoryview(data)
-    while mv:
-        try:
-            n = os.write(fd, mv)
-        except BrokenPipeError:
-            raise BrokenPipeError("FIFO reader closed") from None
-        if n == 0:
-            raise OSError("write returned 0")
-        mv = mv[n:]
+def _write_all(
+    fd: ResgridMqWriter,
+    data: bytes,
+    *,
+    prb: int = 0,
+    symbols: int = 0,
+) -> None:
+    """Write one logical frame on the POSIX mq (optional **prb** / **symbols** in v2 chunk header)."""
+    try:
+        fd.send_frame(data, prb=prb, symbols=symbols)
+    except OSError as e:
+        raise BrokenPipeError("MQ reader closed") from e
 
 
 def synth_frame_u8(frame_idx: int, prb: int, sym: int, pattern: int = 0) -> np.ndarray:
@@ -710,23 +682,23 @@ def _random_rgba_frame_bytes(width: int, height: int) -> bytes:
 
 
 def run_fifo_images_main(
-    fifo_path: str,
+    mq_path: str,
     width: int,
     height: int,
     fps_default: int,
     pattern: str,
     generator_shm: str | None,
 ) -> None:
-    """Write raw RGBA frames (row-major, ``width * height * 4`` bytes) to a named pipe for ``resgrid_plotter --fifo-images``.
+    """Write raw RGBA frames (row-major, ``width * height * 4`` bytes) to the POSIX mq for ``resgrid_plotter --mq-images``.
 
     For ``testsrc`` / ``smptebars`` / ``mandelbrot``, frames are decoded from **FFmpeg lavfi** (same nominal source sizes
     as backend ``_LAVFI_SOURCE_PRESETS``), scaled to ``width``×``height``. For ``randomnoise``, each frame is filled in
     Python with **NumPy** ``randint`` RGB at the output size (no FFmpeg). All paths use the same SHM / ``fps_default`` pacing.
     """
     if width < 1 or height < 1:
-        raise SystemExit("fifo-images: invalid rgba dimensions")
+        raise SystemExit("mq-images: invalid rgba dimensions")
     if pattern not in ("testsrc", "smptebars", "mandelbrot", "randomnoise"):
-        raise SystemExit(f"fifo-images: unknown --image-pattern {pattern!r}")
+        raise SystemExit(f"mq-images: unknown --image-pattern {pattern!r}")
     frame_bytes = width * height * 4
     prod_shm: shared_memory.SharedMemory | None = None
     if generator_shm:
@@ -743,13 +715,12 @@ def run_fifo_images_main(
 
     if pattern == "randomnoise":
         _LOG.info(
-            "fifo-images writer → %r size=%dx%d pattern=randomnoise (Python/NumPy random RGBA; "
-            "blocks until plotter opens read end)",
-            fifo_path,
+            "mq-images writer → %r size=%dx%d pattern=randomnoise (Python/NumPy random RGBA)",
+            mq_path,
             width,
             height,
         )
-        fd = os.open(fifo_path, os.O_WRONLY)
+        out = ResgridMqWriter(mq_path)
         try:
             fr = 0
             interval_t0 = time.perf_counter()
@@ -762,17 +733,11 @@ def run_fifo_images_main(
                 if len(raw) != frame_bytes:
                     _LOG.error("internal: rgba size mismatch %s != %s", len(raw), frame_bytes)
                     break
-                mv = memoryview(raw)
-                while len(mv) and not stop:
-                    try:
-                        nw = os.write(fd, mv)
-                    except BrokenPipeError:
-                        _LOG.warning("fifo-images: reader closed pipe")
-                        return
-                    if nw == 0:
-                        _LOG.error("fifo-images: write returned 0")
-                        return
-                    mv = mv[nw:]
+                try:
+                    _write_all(out, raw, prb=0, symbols=0)
+                except BrokenPipeError:
+                    _LOG.warning("mq-images: reader closed")
+                    return
                 fr += 1
                 frames_in_interval += 1
                 now = time.perf_counter()
@@ -783,7 +748,7 @@ def run_fifo_images_main(
                     interval_t0 = now
                     frames_in_interval = 0
                     _LOG.debug(
-                        "fifo-images achieved_fps=%.2f target_hz=%.2f frame=%d",
+                        "mq-images achieved_fps=%.2f target_hz=%.2f frame=%d",
                         fps_m,
                         hz,
                         fr,
@@ -795,10 +760,7 @@ def run_fifo_images_main(
                 else:
                     next_t = time.perf_counter()
         finally:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
+            out.close()
             if prod_shm is not None:
                 prod_shm.close()
         return
@@ -828,8 +790,8 @@ def run_fifo_images_main(
     ]
 
     _LOG.info(
-        "fifo-images writer → %r size=%dx%d pattern=%s lavfi=%r (FIFO write opens before first frame so plotter can open read)",
-        fifo_path,
+        "mq-images writer → %r size=%dx%d pattern=%s lavfi=%r",
+        mq_path,
         width,
         height,
         pattern,
@@ -840,7 +802,7 @@ def run_fifo_images_main(
     reader_t: threading.Thread | None = None
     latest_lock = threading.Lock()
     latest: list[bytes | None] = [None]
-    fd: int | None = None
+    fd: ResgridMqWriter | None = None
 
     def reader_main() -> None:
         assert proc is not None and proc.stdout is not None
@@ -852,7 +814,7 @@ def run_fifo_images_main(
                 with latest_lock:
                     latest[0] = data
         except Exception:
-            _LOG.exception("fifo-images ffmpeg stdout reader failed")
+            _LOG.exception("mq-images ffmpeg stdout reader failed")
 
     def stderr_main() -> None:
         assert proc is not None and proc.stderr is not None
@@ -862,9 +824,9 @@ def run_fifo_images_main(
                     break
                 txt = line.decode("utf-8", errors="replace").rstrip()
                 if txt:
-                    _LOG.warning("fifo-images ffmpeg: %s", txt)
+                    _LOG.warning("mq-images ffmpeg: %s", txt)
         except Exception:
-            _LOG.exception("fifo-images ffmpeg stderr reader failed")
+            _LOG.exception("mq-images ffmpeg stderr reader failed")
 
     try:
         try:
@@ -877,22 +839,24 @@ def run_fifo_images_main(
             )
         except FileNotFoundError as e:
             raise SystemExit(
-                f"fifo-images: {ff_bin!r} not found; install ffmpeg or set FFMPEG_BINARY"
+                f"mq-images: {ff_bin!r} not found; install ffmpeg or set FFMPEG_BINARY"
             ) from e
         reader_t = threading.Thread(target=reader_main, daemon=True)
         reader_t.start()
         threading.Thread(target=stderr_main, daemon=True).start()
 
-        # Open write end *before* waiting for FFmpeg: resgrid_plotter blocks on O_RDONLY until a writer exists;
-        # waiting for the first frame first would deadlock (no reader → lavfi never drains).
-        _LOG.info("fifo-images opening FIFO write end %r (%d bytes/frame)", fifo_path, frame_bytes)
-        fd = os.open(fifo_path, os.O_WRONLY)
+        _LOG.info(
+            "mq-images opening POSIX mq write %r (%d bytes/frame)",
+            mq_path,
+            frame_bytes,
+        )
+        fd = ResgridMqWriter(mq_path)
 
         first = _wait_fifo_rgba_frame(proc, latest_lock, latest, frame_bytes, 120.0)
         if first is None:
             rc = proc.poll()
             _LOG.error(
-                "fifo-images: no RGBA frame from FFmpeg within timeout (exit=%s); check stderr logs",
+                "mq-images: no RGBA frame from FFmpeg within timeout (exit=%s); check stderr logs",
                 rc,
             )
             return
@@ -913,12 +877,12 @@ def run_fifo_images_main(
                     break
                 if proc.poll() is not None:
                     _LOG.error(
-                        "fifo-images ffmpeg exited (rc=%s) before a full frame",
+                        "mq-images ffmpeg exited (rc=%s) before a full frame",
                         proc.returncode,
                     )
                     return
                 if time.perf_counter() - spin0 > 30.0:
-                    _LOG.error("fifo-images: timed out waiting for ffmpeg frame")
+                    _LOG.error("mq-images: timed out waiting for ffmpeg frame")
                     return
                 time.sleep(0.005)
             if stop or raw is None:
@@ -926,17 +890,12 @@ def run_fifo_images_main(
             if len(raw) != frame_bytes:
                 _LOG.error("internal: rgba size mismatch %s != %s", len(raw), frame_bytes)
                 break
-            mv = memoryview(raw)
-            while len(mv) and not stop:
-                try:
-                    nw = os.write(fd, mv)
-                except BrokenPipeError:
-                    _LOG.warning("fifo-images: reader closed pipe")
-                    return
-                if nw == 0:
-                    _LOG.error("fifo-images: write returned 0")
-                    return
-                mv = mv[nw:]
+            try:
+                assert fd is not None
+                _write_all(fd, raw, prb=0, symbols=0)
+            except BrokenPipeError:
+                _LOG.warning("mq-images: reader closed")
+                return
             fr += 1
             frames_in_interval += 1
             now = time.perf_counter()
@@ -947,7 +906,7 @@ def run_fifo_images_main(
                 interval_t0 = now
                 frames_in_interval = 0
                 _LOG.debug(
-                    "fifo-images achieved_fps=%.2f target_hz=%.2f frame=%d",
+                    "mq-images achieved_fps=%.2f target_hz=%.2f frame=%d",
                     fps_m,
                     hz,
                     fr,
@@ -974,10 +933,7 @@ def run_fifo_images_main(
         if reader_t is not None:
             reader_t.join(timeout=2.0)
         if fd is not None:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
+            fd.close()
         if prod_shm is not None:
             prod_shm.close()
 
@@ -985,42 +941,40 @@ def run_fifo_images_main(
 def main() -> None:
     ap = argparse.ArgumentParser(
         description=(
-            "Synthetic resource grid → named pipes, or raw RGBA → ``--fifo-images`` for resgrid_plotter. "
-            "Full-grid FIFO (--data-mode 2): each IQ write is one complete PRB×symbols I/Q raster. "
-            "Slot-message / channel-based (--data-mode 3): demo slot allocation records on --fifo-fapi "
-            "(partial grids per message); optional IQ sidecar on --fifo-resource-grid. "
-            "Uses optional SHM for pacing/pattern; --slot-only emits slot FIFO only."
+            "Synthetic resource grid → POSIX message queues for **resgrid_plotter** (**--mq-resource-grid**, **--mq-fapi**). "
+            "Full-grid (--data-mode 2): each IQ send is one complete PRB×symbols I/Q raster. "
+            "Slot / channel-based (--data-mode 3): demo slot allocation records on **--mq-fapi**; optional IQ sidecar on **--mq-resource-grid**. "
+            "Raw RGBA: **--mq-images**. Uses optional SHM for pacing/pattern; **--slot-only** emits slot mq only."
         ),
     )
     ap.add_argument(
-        "--fifo-resource-grid",
-        "--fifo",
-        dest="fifo_resource_grid",
+        "--mq-resource-grid",
+        dest="mq_resource_grid",
         nargs="?",
-        const=_DEFAULT_RESOURCE_GRID_FIFO_PATH,
+        const=_DEFAULT_RESOURCE_GRID_MQ_PATH,
         default=None,
-        metavar="PATH",
+        metavar="NAME",
         help=(
-            "Full IQ resource-grid named pipe (resgrid_plotter --fifo-resource-grid). If the flag is present without "
-            f"PATH, uses {_DEFAULT_RESOURCE_GRID_FIFO_PATH!r} (env CUDA_IQ_FIFO_PATH or default /tmp/resource_grid.fifo). "
-            "Required for --data-mode 2 unless defaulted; optional IQ sidecar for --data-mode 3. Alias: --fifo."
+            "Full IQ resource-grid POSIX mq (resgrid_plotter --mq-resource-grid). If the flag is present without "
+            f"NAME, uses {_DEFAULT_RESOURCE_GRID_MQ_PATH!r} (env CUDA_IQ_MQ_PATH). "
+            "Required for --data-mode 2 unless defaulted; optional IQ sidecar for --data-mode 3."
         ),
     )
     ap.add_argument(
-        "--fifo-resource-grid-mode",
-        dest="fifo_resource_grid_mode",
+        "--mq-resource-grid-mode",
+        dest="mq_resource_grid_mode",
         choices=("full", "slot"),
         default="full",
         help=(
-            "Standalone --fifo-resource-grid only (no --fifo-fapi): 'full' = one raw float32 I/Q raster per write. "
-            "'slot' = framed slot-IQ stream for resgrid_plotter --fifo-resource-grid-mode slot (header + complex "
+            "Standalone --mq-resource-grid only (no --mq-fapi): 'full' = one raw float32 I/Q raster per send. "
+            "'slot' = framed slot-IQ stream for resgrid_plotter --mq-resource-grid-mode slot (header + complex "
             "payload; demo sends one full-grid snapshot per slot_id per paced tick)."
         ),
     )
     ap.add_argument(
         "--slot-only",
         action="store_true",
-        help="Only write demo slot records to the FAPI FIFO (no resource-grid FIFO). Path: --fifo-fapi or default /tmp/fapi.fifo in data-mode 3. Same as --data-mode 3 with no --fifo-resource-grid.",
+        help="Only write demo slot records to the FAPI mq (no resource-grid mq). Path: --mq-fapi or default in data-mode 3. Same as --data-mode 3 with no --mq-resource-grid.",
     )
     ap.add_argument(
         "--data-mode",
@@ -1028,10 +982,10 @@ def main() -> None:
         choices=(2, 3),
         default=None,
         help=(
-            "2: full-grid FIFO — each --fifo-resource-grid write is one complete PRB×symbols I/Q raster "
-            "(matches resgrid_plotter --fifo-resource-grid). "
-            "3: FAPI / slot messages — --fifo-fapi optional (defaults to CUDA_SLOT_FIFO_PATH or /tmp/fapi.fifo); "
-            "messages carry partial grids; omit --fifo-resource-grid for slot-only demo."
+            "2: full-grid — each --mq-resource-grid send is one complete PRB×symbols I/Q raster "
+            "(matches resgrid_plotter --mq-resource-grid). "
+            "3: FAPI / slot messages — --mq-fapi optional (defaults to CUDA_SLOT_MQ_PATH); "
+            "messages carry partial grids; omit --mq-resource-grid for slot-only demo."
         ),
     )
     ap.add_argument(
@@ -1056,50 +1010,48 @@ def main() -> None:
         help="With --generator-shm, pattern id is read from SHM @16 each frame; this value is used when SHM is absent, and as fallback if that uint32 cannot be read.",
     )
     ap.add_argument(
-        "--fifo-fapi",
-        "--slot-fifo",
-        dest="fifo_fapi",
+        "--mq-fapi",
+        dest="mq_fapi",
         nargs="?",
-        const=_DEFAULT_FAPI_FIFO_PATH,
+        const=_DEFAULT_FAPI_MQ_PATH,
         default=None,
-        metavar="PATH",
+        metavar="NAME",
         help=(
-            "FAPI / slot-message named pipe (resgrid_plotter --fifo-fapi). If the flag is present without PATH, "
-            f"uses {_DEFAULT_FAPI_FIFO_PATH!r} (env CUDA_SLOT_FIFO_PATH or default /tmp/fapi.fifo). "
-            "Emits demo slot records at --slot-interval. Legacy alias: --slot-fifo."
+            "FAPI / slot-message POSIX mq (resgrid_plotter --mq-fapi). If the flag is present without NAME, "
+            f"uses {_DEFAULT_FAPI_MQ_PATH!r} (env CUDA_SLOT_MQ_PATH). "
+            "Emits demo slot records at --slot-interval."
         ),
     )
     ap.add_argument(
-        "--fifo-images",
+        "--mq-images",
         nargs="?",
-        const=_DEFAULT_IMAGES_FIFO_PATH,
+        const=_DEFAULT_IMAGES_MQ_PATH,
         default=None,
-        metavar="PATH",
+        metavar="NAME",
         help=(
-            "Raw RGBA named pipe for resgrid_plotter --fifo-images. If the flag is present without PATH, uses "
-            f"{_DEFAULT_IMAGES_FIFO_PATH!r} (env RESGRID_FIFO_IMAGES or default /tmp/images.fifo). "
-            "Exclusive with --fifo-resource-grid / --fifo-fapi. Backend starts this mode from **POST /api/generator/start** "
-            "when **RESGRID_FIFO_IMAGES** is set and the plotter is already running."
+            "Raw RGBA POSIX mq for resgrid_plotter --mq-images. If the flag is present without NAME, uses "
+            f"{_DEFAULT_IMAGES_MQ_PATH!r} (env RESGRID_MQ_IMAGES). "
+            "Exclusive with --mq-resource-grid / --mq-fapi. Backend starts this mode from POST /api/generator/start when the plotter is running."
         ),
     )
     ap.add_argument(
         "--rgba-width",
         type=int,
         default=0,
-        help="With --fifo-images: frame width in pixels (must match padded plotter canvas).",
+        help="With --mq-images: frame width in pixels (must match padded plotter canvas).",
     )
     ap.add_argument(
         "--rgba-height",
         type=int,
         default=0,
-        help="With --fifo-images: frame height in pixels (must match padded plotter canvas).",
+        help="With --mq-images: frame height in pixels (must match padded plotter canvas).",
     )
     ap.add_argument(
         "--image-pattern",
         choices=("testsrc", "smptebars", "mandelbrot", "randomnoise"),
         default="testsrc",
         help=(
-            "With --fifo-images: image source (maps from API preset). testsrc/smptebars/mandelbrot use FFmpeg lavfi "
+            "With --mq-images: image source (maps from API preset). testsrc/smptebars/mandelbrot use FFmpeg lavfi "
             "then scale to --rgba-width/height; randomnoise fills each frame with NumPy random RGB in Python (no FFmpeg)."
         ),
     )
@@ -1136,7 +1088,7 @@ def main() -> None:
         type=float,
         default=2.0,
         help=(
-            "Seconds between slot demo records by wall clock; use 0 with --fifo to emit one slot record per IQ write "
+            "Seconds between slot demo records by wall clock; use 0 with --mq-resource-grid to emit one slot record per IQ write "
             "(matches --fps). Backend mode 3 defaults to 1/plotter_fps via CUDA_SLOT_DEMO_INTERVAL=fps."
         ),
     )
@@ -1155,12 +1107,12 @@ def main() -> None:
     ap.add_argument(
         "--zero-fill",
         action="store_true",
-        help="Write all-zero float32 I/Q frames (empty full-grid raster in FIFO mode); uses --generator-shm for pacing when set.",
+        help="Write all-zero float32 I/Q frames (empty full-grid raster); uses --generator-shm for pacing when set.",
     )
     ap.add_argument(
         "--quiet",
         action="store_true",
-        help="Suppress INFO log lines for each slot FIFO record",
+        help="Suppress INFO log lines for each slot mq record",
     )
     ap.add_argument(
         "--log-level",
@@ -1181,22 +1133,22 @@ def main() -> None:
         stream=sys.stderr,
     )
 
-    if args.fifo_images:
-        if args.fifo_resource_grid or args.fifo_fapi or args.slot_only:
+    if args.mq_images:
+        if args.mq_resource_grid or args.mq_fapi or args.slot_only:
             _LOG.error(
-                "--fifo-images cannot be combined with --fifo-resource-grid, --fifo-fapi, or --slot-only"
+                "--mq-images cannot be combined with --mq-resource-grid, --mq-fapi, or --slot-only"
             )
             sys.exit(1)
         if args.rgba_width < 1 or args.rgba_height < 1:
             _LOG.error(
-                "--fifo-images requires --rgba-width and --rgba-height (positive integers)"
+                "--mq-images requires --rgba-width and --rgba-height (positive integers)"
             )
             sys.exit(1)
         if args.fps < 1:
-            _LOG.error("--fps must be >= 1 for --fifo-images")
+            _LOG.error("--fps must be >= 1 for --mq-images")
             sys.exit(1)
         run_fifo_images_main(
-            args.fifo_images,
+            args.mq_images,
             args.rgba_width,
             args.rgba_height,
             args.fps,
@@ -1205,31 +1157,31 @@ def main() -> None:
         )
         return
 
-    if args.slot_only and args.fifo_resource_grid:
-        _LOG.error("--slot-only cannot be combined with --fifo-resource-grid")
+    if args.slot_only and args.mq_resource_grid:
+        _LOG.error("--slot-only cannot be combined with --mq-resource-grid")
         sys.exit(1)
 
-    if args.fifo_fapi and args.fifo_resource_grid_mode == "slot":
-        _LOG.error("--fifo-resource-grid-mode slot applies only without --fifo-fapi")
+    if args.mq_fapi and args.mq_resource_grid_mode == "slot":
+        _LOG.error("--mq-resource-grid-mode slot applies only without --mq-fapi")
         sys.exit(1)
 
     dm = args.data_mode
     if dm is None:
         dm = 3 if args.slot_only else 2
-    slot_only_run = args.slot_only or (dm == 3 and args.fifo_resource_grid is None)
+    slot_only_run = args.slot_only or (dm == 3 and args.mq_resource_grid is None)
 
-    if dm == 3 and args.fifo_fapi is None:
-        args.fifo_fapi = _DEFAULT_FAPI_FIFO_PATH
+    if dm == 3 and args.mq_fapi is None:
+        args.mq_fapi = _DEFAULT_FAPI_MQ_PATH
 
     if slot_only_run and args.zero_fill:
         _LOG.error(
-            "slot-only (or --data-mode 3 without --fifo-resource-grid) conflicts with --zero-fill"
+            "slot-only (or --data-mode 3 without --mq-resource-grid) conflicts with --zero-fill"
         )
         sys.exit(1)
 
     if dm == 2 and slot_only_run:
         _LOG.error(
-            "--data-mode 2 requires --fifo-resource-grid (use --data-mode 3 and --fifo-fapi for slot-only)"
+            "--data-mode 2 requires --mq-resource-grid (use --data-mode 3 and --mq-fapi for slot-only)"
         )
         sys.exit(1)
 
@@ -1243,14 +1195,14 @@ def main() -> None:
         _LOG.info(
             "slot-only demo data_mode=%s slot_fifo=%r interval=%ss pattern=%s grid=%d×%d",
             dm,
-            args.fifo_fapi,
+            args.mq_fapi,
             interval_eff,
             args.slot_pattern,
             args.prb,
             args.symbols,
         )
         run_slot_fifo_standalone(
-            args.fifo_fapi,
+            args.mq_fapi,
             args.prb,
             args.symbols,
             interval_eff,
@@ -1266,12 +1218,12 @@ def main() -> None:
         )
         return
 
-    if dm == 2 and args.fifo_resource_grid is None:
-        args.fifo_resource_grid = _DEFAULT_RESOURCE_GRID_FIFO_PATH
+    if dm == 2 and args.mq_resource_grid is None:
+        args.mq_resource_grid = _DEFAULT_RESOURCE_GRID_MQ_PATH
 
-    if not args.fifo_resource_grid:
+    if not args.mq_resource_grid:
         _LOG.error(
-            "--fifo-resource-grid is required for IQ generation unless using slot-only / --data-mode 3 without fifo"
+            "--mq-resource-grid is required for IQ generation unless using slot-only / --data-mode 3 without mq"
         )
         sys.exit(1)
 
@@ -1279,9 +1231,9 @@ def main() -> None:
         print("invalid prb/symbols/fps", file=sys.stderr)
         sys.exit(1)
 
-    if args.fifo_fapi and args.slot_interval < 0:
+    if args.mq_fapi and args.slot_interval < 0:
         _LOG.error(
-            "--slot-interval must be >= 0 when using --fifo-fapi (0 = one slot record per IQ write)"
+            "--slot-interval must be >= 0 when using --mq-fapi (0 = one slot record per IQ write)"
         )
         sys.exit(1)
 
@@ -1312,19 +1264,18 @@ def main() -> None:
     if args.generator_shm:
         prod_shm = _attach_generator_shm(args.generator_shm)
 
-    slot_fd: int | None = None
+    slot_fd: ResgridMqWriter | None = None
     slot_id_counter = 1
     next_slot_deadline = time.perf_counter()
 
-    # Blocks until a reader opens the FIFO for reading.
-    fd = os.open(args.fifo_resource_grid, os.O_WRONLY)
-    if args.fifo_fapi:
-        slot_fd = os.open(args.fifo_fapi, os.O_WRONLY)
+    fd = ResgridMqWriter(args.mq_resource_grid)
+    if args.mq_fapi:
+        slot_fd = ResgridMqWriter(args.mq_fapi)
     symbol_windows: list[tuple[int, int]] | None = None
     slot_rnti_rng: np.random.Generator | None = None
-    if args.fifo_fapi and args.slot_pattern in ("symbol-windows", "symbol-columns"):
+    if args.mq_fapi and args.slot_pattern in ("symbol-windows", "symbol-columns"):
         slot_rnti_rng = np.random.default_rng(args.slot_rnti_seed)
-    if args.fifo_fapi and args.slot_pattern == "symbol-windows":
+    if args.mq_fapi and args.slot_pattern == "symbol-windows":
         rng_sw = np.random.default_rng(args.slot_window_seed)
         symbol_windows = make_fixed_symbol_prb_windows(
             args.prb, args.symbols, min_prb_span=args.slot_window_min_prb, rng=rng_sw
@@ -1332,7 +1283,7 @@ def main() -> None:
         _LOG.info("symbol-windows: %s PRB windows (fixed for this run)", symbol_windows)
     if (
         dm == 3
-        and args.fifo_fapi
+        and args.mq_fapi
         and args.slot_pattern in ("symbol-windows", "symbol-columns")
     ):
         log_data_mode3_symbol_phy_plan(
@@ -1343,14 +1294,14 @@ def main() -> None:
         _LOG.info(
             "start data_mode=%s fifo=%r grid=%d×%d default_fps=%d frame_bytes=%d generator_shm=%s cli_pattern=%d slot_fifo=%s zero_fill=%s",
             dm,
-            args.fifo_resource_grid,
+            args.mq_resource_grid,
             args.prb,
             args.symbols,
             args.fps,
             frame_bytes,
             args.generator_shm or "(none — pattern from --pattern)",
             cli_pat,
-            args.fifo_fapi or "(off)",
+            args.mq_fapi or "(off)",
             args.zero_fill,
         )
 
@@ -1426,7 +1377,7 @@ def main() -> None:
                 buf = synth_frame_u8(fr, args.prb, args.symbols, pattern)
             if buf.nbytes != frame_bytes:
                 raise RuntimeError(f"frame size {buf.nbytes} != {frame_bytes}")
-            if args.fifo_fapi is None and args.fifo_resource_grid_mode == "slot":
+            if args.mq_fapi is None and args.mq_resource_grid_mode == "slot":
                 sid = (fr + 1) & 0xFFFFFFFF
                 pkt = struct.pack(
                     "<IIHHHHI",
@@ -1439,13 +1390,13 @@ def main() -> None:
                     ncells,
                 ) + np.ascontiguousarray(buf, dtype=np.float32).tobytes()
                 try:
-                    _write_all(fd, pkt)
+                    _write_all(fd, pkt, prb=args.prb, symbols=args.symbols)
                 except BrokenPipeError:
                     _LOG.info("IQ FIFO reader closed (plotter exited); stopping generator")
                     break
             else:
                 try:
-                    _write_all(fd, buf.tobytes())
+                    _write_all(fd, buf.tobytes(), prb=args.prb, symbols=args.symbols)
                 except BrokenPipeError:
                     _LOG.info("IQ FIFO reader closed (plotter exited); stopping generator")
                     break
@@ -1520,9 +1471,9 @@ def main() -> None:
             else:
                 next_t = time.perf_counter()
     finally:
-        os.close(fd)
+        fd.close()
         if slot_fd is not None:
-            os.close(slot_fd)
+            slot_fd.close()
         if prod_shm is not None:
             prod_shm.close()
 

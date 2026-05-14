@@ -4,7 +4,6 @@ import os
 import re
 import shlex
 import socket
-import stat
 import struct
 import subprocess
 import sys
@@ -24,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .access_log import HttpAccessLogMiddleware
 from .log_config import get_logger, setup_backend_logging
+from .resgrid_posix_mq import mq_create_queue, mq_unlink
 
 
 def _env(name: str, default: str) -> str:
@@ -51,18 +51,17 @@ CUDA_IQ_QUEUE_DEPTH = _env("CUDA_IQ_QUEUE_DEPTH", "32")
 CUDA_IQ_RASTER_THREADS = _env("CUDA_IQ_RASTER_THREADS", "16")
 # When 1, auto-spawn **generator.py** after the plotter starts. Default 0: use **POST /api/generator/start** with **`feed`**.
 CUDA_AUTO_START_IQ_GENERATOR = _env("CUDA_AUTO_START_IQ_GENERATOR", "0") == "1"
-# **--fifo-resource-grid** + **--fifo-fapi** + **--fifo-images** are always part of **resgrid_plotter** argv (paths from env; **CUDA_IQ_USE_FIFO** is ignored).
-CUDA_IQ_USE_FIFO = True
-# Default **--fifo-resource-grid** path (matches **resgrid_plotter** ``kDefaultFifoResourceGridPath``).
-_DEFAULT_CUDA_IQ_FIFO_PATH = "/tmp/resource_grid.fifo"
-CUDA_IQ_FIFO_PATH = _env("CUDA_IQ_FIFO_PATH", _DEFAULT_CUDA_IQ_FIFO_PATH)
-# Default slot / FAPI named pipe (matches **resgrid_plotter** default ``kDefaultFifoFapiPath``).
-_DEFAULT_CUDA_SLOT_FIFO_PATH = "/tmp/fapi.fifo"
-# Raw RGBA named pipe for **resgrid_plotter** ``--fifo-images`` — finalized after **GENERATION_MODE** (see below).
-_RESGRID_FIFO_IMAGES_RAW = (os.environ.get("RESGRID_FIFO_IMAGES") or "").strip()
+# **--mq-resource-grid** + **--mq-fapi** + **--mq-images** are always part of **resgrid_plotter** argv (POSIX mq names).
+# Default POSIX mq for full-grid / sidecar I/Q (matches **resgrid_plotter** ``kDefaultMqResourceGridPath``).
+_DEFAULT_CUDA_IQ_MQ_PATH = "/resgrid_iq"
+CUDA_IQ_MQ_PATH = _env("CUDA_IQ_MQ_PATH", _DEFAULT_CUDA_IQ_MQ_PATH)
+# Default slot / FAPI mq (matches **resgrid_plotter** ``kDefaultMqFapiPath``).
+_DEFAULT_CUDA_SLOT_MQ_PATH = "/resgrid_slot"
+CUDA_SLOT_MQ_PATH = _env("CUDA_SLOT_MQ_PATH", _DEFAULT_CUDA_SLOT_MQ_PATH)
+# Raw RGBA mq for **resgrid_plotter** ``--mq-images`` (names must start with ``/``).
+_DEFAULT_RESGRID_MQ_IMAGES = "/resgrid_rgba"
+RESGRID_MQ_IMAGES = _env("RESGRID_MQ_IMAGES", _DEFAULT_RESGRID_MQ_IMAGES)
 CUDA_IQ_GEN_FPS = _env("CUDA_IQ_GEN_FPS", "200")
-CUDA_SLOT_USE_FIFO = _env("CUDA_SLOT_USE_FIFO", "0") == "1"
-CUDA_SLOT_FIFO_PATH = _env("CUDA_SLOT_FIFO_PATH", _DEFAULT_CUDA_SLOT_FIFO_PATH)
 # Seconds between demo slot records, or "fps"/"sync" (default) → 1/CUDA_IQ_FPS to match plotter frame rate (mode 3).
 CUDA_SLOT_DEMO_INTERVAL = _env("CUDA_SLOT_DEMO_INTERVAL", "fps")
 # generator.py --slot-pattern: demo | demo-multi | symbol-columns | symbol-windows (latter: one v1 msg per OFDM symbol per slot, random PRB windows at process start).
@@ -77,7 +76,7 @@ IQ_FIFO_PRODUCER_LOG_LEVEL = _env("IQ_FIFO_PRODUCER_LOG_LEVEL", "").strip().uppe
 
 
 def _plotter_padded_rgba_size() -> tuple[int, int]:
-    """Match ``resgrid_plotter`` square canvas + NVENC min side + 16-align (no letterbox), for ``--fifo-images`` frame size."""
+    """Match ``resgrid_plotter`` square canvas + NVENC min side + 16-align (no letterbox), for ``--mq-images`` frame size."""
     try:
         prb = max(1, int(str(CUDA_IQ_PRB).strip()))
         sym = max(1, int(str(CUDA_IQ_SYMBOLS).strip()))
@@ -185,10 +184,8 @@ def _plotter_spawn_env_for_log() -> dict[str, str]:
         "MTX_WAIT_PORT",
         "CUDA_IQ_FPS",
         "CUDA_IQ_GEN_FPS",
-        "CUDA_IQ_USE_FIFO",
-        "CUDA_IQ_FIFO_PATH",
-        "CUDA_SLOT_USE_FIFO",
-        "CUDA_SLOT_FIFO_PATH",
+        "CUDA_IQ_MQ_PATH",
+        "CUDA_SLOT_MQ_PATH",
         "CUDA_IQ_CELL_PIXELS",
         "CUDA_IQ_PRESET",
         "CUDA_IQ_PRB",
@@ -198,7 +195,9 @@ def _plotter_spawn_env_for_log() -> dict[str, str]:
         "CUDA_IQ_RASTER_THREADS",
         "VIDEO_ENCODER",
         "CUDA_AUTO_START_IQ_GENERATOR",
-        "RESGRID_FIFO_IMAGES",
+        "RESGRID_MQ_IMAGES",
+        "RESGRID_MQ_MSGSIZE",
+        "RESGRID_MQ_MAXMSG",
         "RESGRID_CAPTURER_DIR",
         "RESGRID_ENCODER_SNAP_DIR",
         "RESGRID_CAPTURE_JPEG_THREADS",
@@ -227,7 +226,7 @@ def _coerce_plotter_encoder_fps_cmd(encoder_fps: Optional[float]) -> int:
 
 
 def _effective_fifo_images_generator_fps() -> int:
-    """RGBA FIFO writer rate: match last plotter ``--encoder-fps`` when CUDA is up, else ``CUDA_IQ_FPS``."""
+    """RGBA mq writer rate: match last plotter ``--encoder-fps`` when CUDA is up, else ``CUDA_IQ_FPS``."""
     if _is_plotter_running() and _cuda_spawn_encoder_fps is not None:
         return max(1, _cuda_spawn_encoder_fps)
     try:
@@ -365,116 +364,53 @@ def effective_video_encoder() -> str:
     return _EFFECTIVE_VIDEO_ENCODER
 
 
-def _fifo_chown_target() -> tuple[int, int] | None:
-    """If set, chown resource-grid / FAPI FIFOs after mkfifo so host-mounted pipes match sibling containers (e.g. OAI uid 1000)."""
-    if _env("RESGRID_FIFO_CHOWN_DISABLE", "0").strip().lower() in ("1", "true", "yes", "on"):
-        return None
-    raw = _env("RESGRID_FIFO_CHOWN", "1000:1000").strip()
-    if raw.lower() in ("none", "-", "off", "no"):
-        return None
-    parts = raw.split(":", 1)
-    if len(parts) != 2:
-        _log.warning("RESGRID_FIFO_CHOWN must be uid:gid (got %r); skipping FIFO chown", raw)
-        return None
+def _mq_cleanup_optional(name: str) -> None:
     try:
-        return (int(parts[0].strip()), int(parts[1].strip()))
-    except ValueError:
-        _log.warning("RESGRID_FIFO_CHOWN invalid (got %r); skipping FIFO chown", raw)
-        return None
-
-
-def _fifo_apply_chown(path: str) -> None:
-    t = _fifo_chown_target()
-    if t is None:
-        return
-    u, g = t
-    try:
-        os.chown(path, u, g, follow_symlinks=False)
-    except OSError as e:
-        _log.warning("FIFO chown failed for %s to %s:%s: %s", path, u, g, e)
-
-
-def _close_resource_grid_fifo_peer_hold_unlocked() -> None:
-    """Release the plotter-bootstrap **O_RDWR** hold on the resource-grid FIFO (caller holds ``_lock``)."""
-    global _resource_grid_fifo_peer_fd
-    fd = _resource_grid_fifo_peer_fd
-    _resource_grid_fifo_peer_fd = None
-    if fd is not None:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-
-
-def _open_resource_grid_fifo_peer_for_plotter_unlocked(path: str) -> None:
-    """Open **path** **O_RDWR** so **resgrid_plotter** can open the read end without **generator.py** yet (Linux FIFO rules)."""
-    global _resource_grid_fifo_peer_fd
-    _close_resource_grid_fifo_peer_hold_unlocked()
-    try:
-        _resource_grid_fifo_peer_fd = os.open(path, os.O_RDWR | os.O_NONBLOCK)
-    except OSError as e:
-        _log.error("resource-grid FIFO peer open O_RDWR failed on %s: %s", path, e)
-        raise RuntimeError(
-            f"cannot open resource-grid FIFO {path!r} O_RDWR for plotter bootstrap (see server log): {e}"
-        ) from e
-
-
-def _recreate_plotter_fifo_node(path: str) -> None:
-    """(Re)create a world-writable named pipe for **resgrid_plotter** / **generator.py** attach."""
-    try:
-        os.unlink(path)
-    except FileNotFoundError:
+        mq_unlink(name)
+    except OSError:
         pass
-    os.mkfifo(path, 0o666)
-    os.chmod(path, 0o666)
-    _fifo_apply_chown(path)
 
 
-def _append_plotter_fifo_cli_flag(cmd: list[str], flag: str, path: str, default_path: str) -> None:
-    """Append **resgrid_plotter** FIFO argv: flag alone when **path** matches the binary default, else **flag path**."""
-    if os.path.normpath(path) == os.path.normpath(default_path):
+def _prepare_plotter_posix_mq_unlocked(*, iq_path: str, slot_path: str, rgba_path: str) -> None:
+    for label, p in (
+        ("CUDA_IQ_MQ_PATH", iq_path),
+        ("CUDA_SLOT_MQ_PATH", slot_path),
+        ("RESGRID_MQ_IMAGES", rgba_path),
+    ):
+        if not p.startswith("/"):
+            raise RuntimeError(
+                f"{label} must be a POSIX mq name starting with / (got {p!r})."
+            )
+    mq_create_queue(iq_path)
+    mq_create_queue(slot_path)
+    mq_create_queue(rgba_path)
+
+
+def _append_plotter_mq_cli_flag(cmd: list[str], flag: str, path: str, default_path: str) -> None:
+    if path == default_path:
         cmd.append(flag)
     else:
         cmd.extend([flag, path])
 
 
-def _append_plotter_input_fifo_and_cuda_shm(
+def _append_plotter_input_mq_and_cuda_shm(
     cmd: list[str],
     *,
     cuda_shm_name: str,
-    fifo_images_path: str,
-    default_fifo_images_path: str,
+    mq_images_path: str,
+    default_mq_images_path: str,
     resource_grid_path: Optional[str],
-    slot_fifo_path: Optional[str],
+    slot_mq_path: Optional[str],
 ) -> None:
-    """Append **--fifo-images**; then either RGBA-only (**--cuda-shm**) or full stack (**--fifo-resource-grid** + **--cuda-shm** + **--fifo-fapi**)."""
-    _append_plotter_fifo_cli_flag(cmd, "--fifo-images", fifo_images_path, default_fifo_images_path)
+    """Append **--mq-images**; then either RGBA-only (**--cuda-shm**) or full stack (**--mq-resource-grid** + **--cuda-shm** + **--mq-fapi**)."""
+    _append_plotter_mq_cli_flag(cmd, "--mq-images", mq_images_path, default_mq_images_path)
     if resource_grid_path is None:
         cmd.extend(["--cuda-shm", cuda_shm_name])
         return
-    _append_plotter_fifo_cli_flag(cmd, "--fifo-resource-grid", resource_grid_path, _DEFAULT_CUDA_IQ_FIFO_PATH)
+    _append_plotter_mq_cli_flag(cmd, "--mq-resource-grid", resource_grid_path, _DEFAULT_CUDA_IQ_MQ_PATH)
     cmd.extend(["--cuda-shm", cuda_shm_name])
-    assert slot_fifo_path is not None
-    _append_plotter_fifo_cli_flag(cmd, "--fifo-fapi", slot_fifo_path, _DEFAULT_CUDA_SLOT_FIFO_PATH)
-
-
-def _ensure_named_pipe_for_generator(path: str, *, log_label: str) -> None:
-    """Create a FIFO node if missing so ``generator.py`` can open O_WRONLY (plotter may not have recreated it)."""
-    if os.path.exists(path):
-        try:
-            st = os.stat(path)
-        except OSError as e:
-            raise RuntimeError(f"cannot stat {log_label} path {path!r}: {e}") from e
-        if not stat.S_ISFIFO(st.st_mode):
-            raise RuntimeError(f"{log_label} path exists but is not a named pipe: {path!r}")
-        return
-    _log.info("creating %s named pipe %s for generator attach", log_label, path)
-    try:
-        os.mkfifo(path, 0o666)
-    except FileExistsError:
-        pass
-    os.chmod(path, 0o666)
-    _fifo_apply_chown(path)
+    assert slot_mq_path is not None
+    _append_plotter_mq_cli_flag(cmd, "--mq-fapi", slot_mq_path, _DEFAULT_CUDA_SLOT_MQ_PATH)
 
 
 _GENERATOR_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "generator.py"
@@ -489,11 +425,11 @@ CORS_ORIGIN_REGEX = _env(
 
 
 # Generation modes (**GENERATION_MODE** env at process start). Same labels as **POST /api/generator/start** ``mode``:
-#   **SYNTHETIC_IMAGES** — **generator.py** → **RESGRID_FIFO_IMAGES** (RGBA FIFO); **resgrid_plotter** still opens all FIFO argv paths from env.
-#   **SYNTHETIC_RESOURCE_GRID** — **--fifo-resource-grid** full-grid path + optional **generator.py**;
-#       built-in C++ synthesizer when no external writer (compose **CUDA_IQ_USE_FIFO** is ignored; FIFO is always created).
-#   **SYNTHETIC_FAPI** — **--fifo-fapi** slot messages / channel-based; optional **--fifo-resource-grid** sidecar I/Q.
-# **generator.py** ``--data-mode`` only (one producer shape at a time). **resgrid_plotter** ingests all FIFOs regardless.
+#   **SYNTHETIC_IMAGES** — **generator.py** → **RESGRID_MQ_IMAGES** (RGBA POSIX mq); **resgrid_plotter** always opens **--mq-*** paths from env.
+#   **SYNTHETIC_RESOURCE_GRID** — **--mq-resource-grid** full-grid path + optional **generator.py**;
+#       built-in C++ synthesizer when no external writer (POSIX mq is always created for the plotter argv).
+#   **SYNTHETIC_FAPI** — **--mq-fapi** slot messages / channel-based; optional **--mq-resource-grid** sidecar I/Q.
+# **generator.py** ``--data-mode`` only (one producer shape at a time). **resgrid_plotter** ingests all three mq inputs regardless.
 _GENERATOR_DATA_MODE_FULL_GRID_FIFO = 2
 _GENERATOR_DATA_MODE_SLOT_OR_COMBINED = 3
 
@@ -532,18 +468,15 @@ def _parse_generation_mode(raw: str) -> str:
 
 
 GENERATION_MODE = _parse_generation_mode(_raw_generation_mode_from_env())
-# Default RGBA named pipe when **RESGRID_FIFO_IMAGES** is unset or empty (same path as **resgrid_plotter** default).
-_DEFAULT_RESGRID_FIFO_IMAGES_PATH = "/tmp/images.fifo"
-RESGRID_FIFO_IMAGES = _RESGRID_FIFO_IMAGES_RAW or _DEFAULT_RESGRID_FIFO_IMAGES_PATH
 
 _mtx_path = (urlparse(MTX_RTSP_URL).path or "/live").strip("/") or "live"
 
 _ffmpeg: Optional[subprocess.Popen] = None
 _plotter_process: Optional[subprocess.Popen] = None
 _generator_script_proc: Optional[subprocess.Popen] = None
-# True while **generator.py** was started with **--fifo-fapi** (slot / combined path), not resource-grid-only.
+# True while **generator.py** was started with **--mq-fapi** (slot / combined path), not resource-grid-only.
 _generator_script_writes_fapi: bool = False
-# True while **generator.py** was started with **--fifo-resource-grid** (full-grid / combined path), not slot-only.
+# True while **generator.py** was started with **--mq-resource-grid** (full-grid / combined path), not slot-only.
 _generator_script_writes_resource_grid: bool = False
 _fifo_images_generator: Optional[subprocess.Popen] = None
 _lock = threading.Lock()
@@ -552,12 +485,8 @@ _current_lavfi_video: str = ""
 _current_video_generator_source: Optional[str] = None
 # Set True when the last successful CUDA start created / used the slot named pipe (for cleanup on stop).
 _plotter_fapi_fifo_open: bool = False
-# Set True when the last plotter spawn passed **--fifo-resource-grid** (named pipe open for **generator.py** / external writers).
+# Set True when the last plotter spawn passed **--mq-resource-grid** (POSIX mq open for **generator.py** / external writers).
 _plotter_resource_grid_fifo_open: bool = False
-# Holds **CUDA_IQ_FIFO_PATH** open **O_RDWR** (never read) so **resgrid_plotter**'s blocking **open(O_RDONLY)** on that FIFO
-# returns without a real **generator.py** writer — needed for **feed: fapi** (**--slot-only**) so the plotter still starts and
-# the sidecar reader blocks in **read** until a combined/resource-grid producer appears (do not read this fd; it is not a consumer).
-_resource_grid_fifo_peer_fd: Optional[int] = None
 _cuda_spawn_encoder_fps: Optional[int] = None
 _cuda_plotter_capturer_dir: Optional[str] = None
 
@@ -658,7 +587,7 @@ GeneratorStartFeed = Literal["images", "resource_grid", "fapi"]
 
 
 class GeneratorResponse(BaseModel):
-    """Internal / legacy ack used by **start_plotter_and_generators** (plotter, images FIFO, FFmpeg). Prefer route-specific response models in OpenAPI."""
+    """Internal / legacy ack used by **start_plotter_and_generators** (plotter, RGBA mq **generator.py**, FFmpeg). Prefer route-specific response models in OpenAPI."""
 
     status: str
     pid: Optional[int] = None
@@ -671,7 +600,7 @@ class GeneratorResponse(BaseModel):
         None,
         description=(
             "When starting **resgrid_plotter**: applied **--encoder-fps**. "
-            "When starting **SYNTHETIC_IMAGES** FIFO **generator.py**: target write cadence (matches plotter **--encoder-fps** / **CUDA_IQ_FPS**). "
+            "When starting **SYNTHETIC_IMAGES** **generator.py** (RGBA mq): target write cadence (matches plotter **--encoder-fps** / **CUDA_IQ_FPS**). "
             "Omitted when not applicable."
         ),
     )
@@ -702,7 +631,7 @@ class PlotterControlResponse(BaseModel):
 
 
 class GeneratorLavfiStartResponse(BaseModel):
-    """JSON from **POST /api/generator/start** when **`feed`** is **`images`** (RGBA FIFO **generator.py** + lavfi graph)."""
+    """JSON from **POST /api/generator/start** when **`feed`** is **`images`** (RGBA **generator.py** + lavfi graph)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -729,15 +658,15 @@ def _generator_lavfi_start_from_response(r: GeneratorResponse) -> GeneratorLavfi
 
 
 class VideoGeneratorStatusResponse(BaseModel):
-    """State of **images** mode helpers: RGBA FIFO **generator.py** and/or legacy FFmpeg lavfi."""
+    """State of **images** mode helpers: RGBA **generator.py** (POSIX mq) and/or legacy FFmpeg lavfi."""
 
     running: bool = Field(
-        description="True when **generator.py** (RGBA FIFO) **or** legacy FFmpeg lavfi is active."
+        description="True when **generator.py** (RGBA mq writer) **or** legacy FFmpeg lavfi is active."
     )
     backend: Optional[str] = Field(
         None,
         description=(
-            "Which child feeds MediaMTX: **`fifo_images`** (generator.py → RESGRID_FIFO_IMAGES → resgrid_plotter), "
+            "Which child feeds MediaMTX: **`mq_rgba_images`** (generator.py → RESGRID_MQ_IMAGES → resgrid_plotter), "
             "**`ffmpeg_lavfi`** (legacy FFmpeg lavfi → MediaMTX), or **`null`** when neither runs."
         ),
     )
@@ -759,10 +688,10 @@ class VideoGeneratorStatusResponse(BaseModel):
         None,
         description="Resolved lavfi graph string driving the active backend, or **null** when not running.",
     )
-    fifo_path: Optional[str] = Field(
+    mq_path: Optional[str] = Field(
         None,
         description=(
-            "Server-side **RESGRID_FIFO_IMAGES** path (named pipe). Empty/`null` when the RGBA FIFO feeder "
+            "Server-side **RESGRID_MQ_IMAGES** POSIX mq name (must start with ``/``). Empty/`null` when the RGBA mq feeder "
             "is disabled in this process."
         ),
     )
@@ -771,8 +700,8 @@ class VideoGeneratorStatusResponse(BaseModel):
 class PlotterStartBody(BaseModel):
     """Optional JSON body for **POST /api/plotter/start**.
 
-    **resgrid_plotter** is always started with **--fifo-images**, **--fifo-resource-grid**, and **--fifo-fapi**
-    (paths from **RESGRID_FIFO_IMAGES**, **CUDA_IQ_FIFO_PATH**, **CUDA_SLOT_FIFO_PATH**). The plotter ingests every FIFO;
+    **resgrid_plotter** is always started with **--mq-images**, **--mq-resource-grid**, and **--mq-fapi**
+    (paths from **RESGRID_MQ_IMAGES**, **CUDA_IQ_MQ_PATH**, **CUDA_SLOT_MQ_PATH**). The plotter ingests every mq stream;
     **generator.py** chooses a single producer shape via **``--data-mode``** when you **POST /api/generator/start** (not this route).
 
     Send **`{}`** or omit fields you do not need. Unknown keys (including legacy **`mode`**) are rejected (**422**).
@@ -801,7 +730,7 @@ GeneratorFeedMode = Literal[
 
 
 class GeneratorImagesOptions(BaseModel):
-    """Options for **POST /api/generator/start** when **`feed`** is **`images`** (RGBA FIFO **generator.py**)."""
+    """Options for **POST /api/generator/start** when **`feed`** is **`images`** (RGBA **generator.py** → **RESGRID_MQ_IMAGES**)."""
 
     pattern: Optional[str] = Field(
         None,
@@ -833,8 +762,8 @@ class GeneratorFeedStartBody(BaseModel):
     mode: GeneratorFeedMode = Field(
         ...,
         description=(
-            "**SYNTHETIC_IMAGES** — **generator.py** → **RESGRID_FIFO_IMAGES** (RGBA); optional **`pattern`** / **`source`** / neither (env default). "
-            "**SYNTHETIC_RESOURCE_GRID** — **generator.py** → **CUDA_IQ_FIFO_PATH** (full-grid resource-grid FIFO only). "
+            "**SYNTHETIC_IMAGES** — **generator.py** → **RESGRID_MQ_IMAGES** (RGBA); optional **`pattern`** / **`source`** / neither (env default). "
+            "**SYNTHETIC_RESOURCE_GRID** — **generator.py** → **CUDA_IQ_MQ_PATH** (full-grid resource-grid mq only). "
             "**SYNTHETIC_FAPI** — **generator.py** slot / combined path. "
             "CUDA plotter must already be running for all three."
         ),
@@ -871,13 +800,13 @@ class GeneratorFeedStartBody(BaseModel):
 
 
 class GeneratorStartBody(BaseModel):
-    """JSON for **POST /api/generator/start** using **`feed`**: **images** (RGBA FIFO), **resource_grid** (full-grid FIFO), **fapi** (slot FIFO)."""
+    """JSON for **POST /api/generator/start** using **`feed`**: **images** (RGBA mq), **resource_grid** (full-grid mq), **fapi** (slot mq)."""
 
     feed: GeneratorStartFeed = Field(
         ...,
         description=(
-            "**images** — **generator.py** → **RESGRID_FIFO_IMAGES**. Optional nested **`images`** (**`pattern`** / **`preset`**). "
-            "**fapi** — slot / FAPI FIFO only (**``generator.py``** **``--slot-only``**); no full-grid resource-grid waveform. "
+            "**images** — **generator.py** → **RESGRID_MQ_IMAGES**. Optional nested **`images`** (**`pattern`** / **`preset`**). "
+            "**fapi** — slot / FAPI mq only (**``generator.py``** **``--slot-only``**); no full-grid resource-grid waveform. "
             "CUDA plotter must already be running."
         ),
     )
@@ -928,8 +857,8 @@ class GeneratorFpsResponse(BaseModel):
     max_fps: float = Field(description="Maximum allowed generator FPS (env IQ_PRODUCER_FPS_MAX).")
     generation_mode: str
     generating: bool
-    iq_fifo_mode: bool = Field(
-        description="Legacy JSON field name: **True** when **--fifo-resource-grid** is part of this stack’s plotter argv (**CUDA_IQ_USE_FIFO** is always on)."
+    iq_mq_mode: bool = Field(
+        description="**True** when this stack’s plotter argv includes **--mq-resource-grid** (always on for this server)."
     )
 
 
@@ -965,35 +894,35 @@ class GeneratorControlResponse(BaseModel):
     pid: Optional[int] = None
 
 
-class SyntheticFifoWriterStatus(BaseModel):
-    """Whether **generator.py** is attached to this named pipe and whether the running plotter exposes it."""
+class SyntheticMqWriterStatus(BaseModel):
+    """Whether **generator.py** is attached to this POSIX mq and whether the running plotter exposes it."""
 
-    running: bool = Field(description="True while **generator.py** is alive **and** this FIFO path is active for this writer.")
+    running: bool = Field(description="True while **generator.py** is alive **and** this mq name is active for this writer.")
     pid: Optional[int] = Field(None, description="OS pid when **running** is true.")
     capable: bool = Field(
-        description="True when **resgrid_plotter** was spawned with this FIFO so **generator.py** may attach.",
+        description="True when **resgrid_plotter** was spawned with this mq so **generator.py** may attach.",
     )
-    fifo_path: Optional[str] = Field(
+    mq_path: Optional[str] = Field(
         None,
         description=(
-            "Configured named pipe path for this writer (**CUDA_IQ_FIFO_PATH** or **CUDA_SLOT_FIFO_PATH**); always echoed for discovery. "
-            "**capable** is true only when **resgrid_plotter** on this process opened that FIFO for reads."
+            "Configured POSIX mq name for this writer (**CUDA_IQ_MQ_PATH** or **CUDA_SLOT_MQ_PATH**); echoed for discovery. "
+            "**capable** is true only when **resgrid_plotter** on this process opened that queue for reads."
         ),
     )
 
 
 class GeneratorFullStatus(BaseModel):
-    """Combined **generator.py** / FFmpeg **images** path state, **resource_grid** / **fapi** FIFO writer state, and process **GENERATION_MODE**."""
+    """Combined **generator.py** / FFmpeg **images** path state, **resource_grid** / **fapi** mq writer state, and process **GENERATION_MODE**."""
 
     generation_mode: str = Field(description="Process **GENERATION_MODE** from env at startup.")
     synthetic_video: VideoGeneratorStatusResponse = Field(
-        description="RGBA FIFO **generator.py** and/or legacy FFmpeg lavfi.",
+        description="RGBA **generator.py** (POSIX mq) and/or legacy FFmpeg lavfi.",
     )
-    synthetic_resource_grid: SyntheticFifoWriterStatus = Field(
-        description="Full-grid **--fifo-resource-grid** path (**CUDA_IQ_FIFO_PATH** env on this host).",
+    synthetic_resource_grid: SyntheticMqWriterStatus = Field(
+        description="Full-grid **--mq-resource-grid** path (**CUDA_IQ_MQ_PATH** env on this host).",
     )
-    synthetic_fapi: SyntheticFifoWriterStatus = Field(
-        description="Slot / FAPI FIFO (**--fifo-fapi** / **CUDA_SLOT_FIFO_PATH**).",
+    synthetic_fapi: SyntheticMqWriterStatus = Field(
+        description="Slot / FAPI (**--mq-fapi** / **CUDA_SLOT_MQ_PATH**).",
     )
 
 
@@ -1192,11 +1121,6 @@ def get_generation_mode() -> str:
     return GENERATION_MODE
 
 
-def _resource_grid_fifo_enabled_unlocked() -> bool:
-    """True when this stack is configured to expose **--fifo-resource-grid** (always on; see **CUDA_IQ_USE_FIFO** legacy env)."""
-    return CUDA_IQ_USE_FIFO
-
-
 def _is_generation_mode_channel_based(sm: str) -> bool:
     return sm == SYNTHETIC_FAPI
 
@@ -1364,21 +1288,15 @@ def _spawn_stderr_thread(proc: subprocess.Popen) -> None:
 def _default_generator_producer_fps() -> float:
     """SHM-commanded producer rate (resource grid / FAPI); separate from encoder ``CUDA_IQ_FPS`` (plotter ``--encoder-fps``).
 
-    Python **generator.py** and slot writers follow **CUDA_IQ_GEN_FPS** whenever they are used (**resource_grid** / **fapi** FIFOs,
+    Python **generator.py** and slot writers follow **CUDA_IQ_GEN_FPS** whenever they are used (**resource_grid** / **fapi** mqueues,
     or built-in synthetic grid). Encoder output stays **CUDA_IQ_FPS** (e.g. 24 Hz) via plotter ``--encoder-fps``.
     The plotter ``--fps`` knob is the pipeline / internal producer nominal rate (**CUDA_IQ_GEN_FPS**, e.g. 200 Hz).
     """
-    sm_fn = get_generation_mode()
-    use_gen_default = (
-        CUDA_IQ_USE_FIFO
-        or sm_fn == SYNTHETIC_RESOURCE_GRID
-        or sm_fn == SYNTHETIC_FAPI
-    )
-    raw = CUDA_IQ_GEN_FPS if use_gen_default else CUDA_IQ_FPS
+    raw = CUDA_IQ_GEN_FPS
     try:
         v = float(str(raw).strip())
     except ValueError:
-        v = 200.0 if use_gen_default else 24.0
+        v = 200.0
     return max(IQ_PRODUCER_FPS_MIN, min(IQ_PRODUCER_FPS_MAX, v))
 
 
@@ -1792,7 +1710,7 @@ def _start_fifo_images_generator_unlocked(
     height: int,
     fps: int,
 ) -> int:
-    """Spawn ``generator.py`` writing RGBA to ``RESGRID_FIFO_IMAGES``. Caller holds ``_lock``."""
+    """Spawn ``generator.py`` writing RGBA to ``RESGRID_MQ_IMAGES``. Caller holds ``_lock``."""
     global _fifo_images_generator
     if _fifo_images_generator is not None and _fifo_images_generator.poll() is None:
         return _fifo_images_generator.pid
@@ -1805,8 +1723,8 @@ def _start_fifo_images_generator_unlocked(
         sys.executable,
         "-u",
         str(_GENERATOR_SCRIPT),
-        "--fifo-images",
-        RESGRID_FIFO_IMAGES,
+        "--mq-images",
+        RESGRID_MQ_IMAGES,
         "--rgba-width",
         str(width),
         "--rgba-height",
@@ -1839,7 +1757,7 @@ def _start_fifo_images_generator_unlocked(
     _log.info(
         "fifo-images generator.py started pid=%s path=%s size=%dx%d pattern=%s",
         _fifo_images_generator.pid,
-        RESGRID_FIFO_IMAGES,
+        RESGRID_MQ_IMAGES,
         width,
         height,
         pat,
@@ -1879,7 +1797,7 @@ def _generator_fifo_feed_capable_unlocked() -> bool:
 
 
 def _generator_resource_grid_fifo_capable_unlocked() -> bool:
-    """True when **generator.py** can attach to the resource-grid FIFO (``--fifo-resource-grid``)."""
+    """True when **generator.py** can attach to the resource-grid mq (``--mq-resource-grid``)."""
     if not _is_plotter_running():
         return False
     return bool(_plotter_resource_grid_fifo_open)
@@ -1892,9 +1810,8 @@ def _spawn_generator_slot_only_unlocked(
     fps_arg: str,
     slot_interval: str,
 ) -> int:
-    """Spawn **generator.py** with **``--slot-only``** (FAPI FIFO only; no **``--fifo-resource-grid``**). Caller holds ``_lock``."""
+    """Spawn **generator.py** with **``--slot-only``** (FAPI POSIX mq only; no **``--mq-resource-grid``**). Caller holds ``_lock``."""
     global _generator_script_proc, _generator_script_writes_fapi, _generator_script_writes_resource_grid
-    _ensure_named_pipe_for_generator(slot_fifo_path, log_label="slot FIFO")
     py_cmd = [
         sys.executable,
         "-u",
@@ -1902,7 +1819,7 @@ def _spawn_generator_slot_only_unlocked(
         "--slot-only",
         "--data-mode",
         str(_GENERATOR_DATA_MODE_SLOT_OR_COMBINED),
-        "--fifo-fapi",
+        "--mq-fapi",
         slot_fifo_path,
         "--fps",
         fps_arg,
@@ -1927,7 +1844,7 @@ def _spawn_generator_slot_only_unlocked(
             stderr=subprocess.PIPE,
         )
     except OSError:
-        _log.exception("Failed to spawn slot FIFO demo producer")
+        _log.exception("Failed to spawn slot mq demo producer")
         raise
     _spawn_generator_script_stderr_thread(_generator_script_proc)
     time.sleep(0.15)
@@ -1937,7 +1854,7 @@ def _spawn_generator_slot_only_unlocked(
         _generator_script_proc = None
         _generator_script_writes_fapi = False
         _generator_script_writes_resource_grid = False
-        raise RuntimeError("slot FIFO demo producer failed to start; check server logs")
+        raise RuntimeError("slot mq demo producer failed to start; check server logs")
     _generator_script_writes_fapi = True
     _generator_script_writes_resource_grid = False
     return _generator_script_proc.pid
@@ -1951,10 +1868,10 @@ def _start_generator_script_unlocked(
 ) -> int:
     """Spawn generator.py. Caller must hold _lock; CUDA must be running with producer SHM.
 
-    **resource_grid_only** — **``--fifo-resource-grid``** + **``--data-mode``** **2** only (no **``--fifo-fapi``** / slot demo args)
+    **resource_grid_only** — **``--mq-resource-grid``** + **``--data-mode``** **2** only (no **``--mq-fapi``** / slot demo args)
     even when the plotter has opened the FAPI named pipe.
 
-    **fapi_slot_only** — **``--slot-only``** + **``--fifo-fapi``** only (no **``--fifo-resource-grid``**) even when the plotter
+    **fapi_slot_only** — **``--slot-only``** + **``--mq-fapi``** only (no **``--mq-resource-grid``**) even when the plotter
     has opened the resource-grid named pipe.
     """
     global _generator_script_proc, _generator_script_writes_fapi, _generator_script_writes_resource_grid
@@ -1971,22 +1888,22 @@ def _start_generator_script_unlocked(
         raise RuntimeError("internal: **resource_grid_only** and **fapi_slot_only** are mutually exclusive")
     if resource_grid_only and not use_resource_grid_fifo:
         raise RuntimeError(
-            "Resource-grid **generator.py** needs **resgrid_plotter** started with **--fifo-resource-grid** "
-            "(named pipe open). **POST /api/plotter/stop** then **POST /api/plotter/start**."
+            "Resource-grid **generator.py** needs **resgrid_plotter** started with **--mq-resource-grid** "
+            "(queue open). **POST /api/plotter/stop** then **POST /api/plotter/start**."
         )
     if fapi_slot_only and not use_fapi_fifo:
         raise RuntimeError(
-            "FAPI / slot **generator.py** needs **resgrid_plotter** started with **--fifo-fapi** "
+            "FAPI / slot **generator.py** needs **resgrid_plotter** started with **--mq-fapi** "
             "(named pipe open). **POST /api/plotter/stop** then **POST /api/plotter/start**."
         )
     if not use_resource_grid_fifo and not use_fapi_fifo:
-        raise RuntimeError("This generator script run has no resource-grid or FAPI FIFO to write.")
+        raise RuntimeError("This generator script run has no resource-grid or FAPI mq to write.")
     if _generator_producer_shm is None:
         raise RuntimeError("Producer shared memory missing; restart the plotter.")
 
     producer_shm_name = _generator_producer_shm.name
-    fifo_path = CUDA_IQ_FIFO_PATH
-    slot_fifo_path = CUDA_SLOT_FIFO_PATH
+    iq_mq_path = CUDA_IQ_MQ_PATH
+    slot_mq_path = CUDA_SLOT_MQ_PATH
 
     fps_arg = str(CUDA_IQ_GEN_FPS).strip() or "200"
     slot_interval = _slot_demo_interval_seconds_str(encoder_hz_override=encoder_hz_for_slot)
@@ -1997,7 +1914,7 @@ def _start_generator_script_unlocked(
     if fapi_slot_only:
         return _spawn_generator_slot_only_unlocked(
             producer_shm_name=producer_shm_name,
-            slot_fifo_path=slot_fifo_path,
+            slot_fifo_path=slot_mq_path,
             fps_arg=fps_arg,
             slot_interval=slot_interval,
         )
@@ -2009,13 +1926,12 @@ def _start_generator_script_unlocked(
             prod_dm = _GENERATOR_DATA_MODE_SLOT_OR_COMBINED
         else:
             prod_dm = _GENERATOR_DATA_MODE_FULL_GRID_FIFO
-        _ensure_named_pipe_for_generator(fifo_path, log_label="resource-grid FIFO")
         py_cmd = [
             sys.executable,
             "-u",
             str(_GENERATOR_SCRIPT),
-            "--fifo-resource-grid",
-            fifo_path,
+            "--mq-resource-grid",
+            iq_mq_path,
             "--data-mode",
             str(prod_dm),
             "--prb",
@@ -2028,11 +1944,10 @@ def _start_generator_script_unlocked(
             producer_shm_name,
         ]
         if use_fapi_fifo and not resource_grid_only:
-            _ensure_named_pipe_for_generator(slot_fifo_path, log_label="slot FIFO")
             py_cmd.extend(
                 [
-                    "--fifo-fapi",
-                    slot_fifo_path,
+                    "--mq-fapi",
+                    slot_mq_path,
                     "--slot-interval",
                     slot_interval,
                     "--slot-pattern",
@@ -2066,7 +1981,7 @@ def _start_generator_script_unlocked(
 
     return _spawn_generator_slot_only_unlocked(
         producer_shm_name=producer_shm_name,
-        slot_fifo_path=slot_fifo_path,
+        slot_fifo_path=slot_mq_path,
         fps_arg=fps_arg,
         slot_interval=slot_interval,
     )
@@ -2082,14 +1997,11 @@ def _terminate_plotter_unlocked() -> None:
         _cuda_spawn_encoder_fps = None
         _plotter_shm_destroy_unlocked()
         _cuda_plotter_capturer_dir = None
-        if _plotter_fapi_fifo_open:
-            try:
-                os.unlink(CUDA_SLOT_FIFO_PATH)
-            except OSError:
-                pass
+        if _plotter_fapi_fifo_open or _plotter_resource_grid_fifo_open:
+            for p in (CUDA_IQ_MQ_PATH, CUDA_SLOT_MQ_PATH, RESGRID_MQ_IMAGES):
+                _mq_cleanup_optional(p)
             _plotter_fapi_fifo_open = False
-        _plotter_resource_grid_fifo_open = False
-        _close_resource_grid_fifo_peer_hold_unlocked()
+            _plotter_resource_grid_fifo_open = False
         return
     assert _plotter_process is not None
     _log.info("Terminating CUDA plotter pid=%s", _plotter_process.pid)
@@ -2102,24 +2014,21 @@ def _terminate_plotter_unlocked() -> None:
     _cuda_spawn_encoder_fps = None
     _plotter_shm_destroy_unlocked()
     _cuda_plotter_capturer_dir = None
-    if _plotter_fapi_fifo_open:
-        try:
-            os.unlink(CUDA_SLOT_FIFO_PATH)
-        except OSError:
-            pass
+    if _plotter_fapi_fifo_open or _plotter_resource_grid_fifo_open:
+        for p in (CUDA_IQ_MQ_PATH, CUDA_SLOT_MQ_PATH, RESGRID_MQ_IMAGES):
+            _mq_cleanup_optional(p)
         _plotter_fapi_fifo_open = False
-    _plotter_resource_grid_fifo_open = False
-    _close_resource_grid_fifo_peer_hold_unlocked()
+        _plotter_resource_grid_fifo_open = False
     with _stats_lock:
         _stats = GenerationStats()
 
 
 def _video_generator_status_unlocked() -> VideoGeneratorStatusResponse:
-    """Caller must hold ``_lock`` when FIFO / FFmpeg children may change."""
+    """Caller must hold ``_lock`` when generator / FFmpeg children may change."""
     fifo_up = _fifo_images_generator_running()
     ff_up = _is_ffmpeg_running()
     if fifo_up:
-        backend = "fifo_images"
+        backend = "mq_rgba_images"
         assert _fifo_images_generator is not None
         pid = _fifo_images_generator.pid
     elif ff_up:
@@ -2139,38 +2048,38 @@ def _video_generator_status_unlocked() -> VideoGeneratorStatusResponse:
         source=source,
         pattern=pattern,
         lavfi_video=graph or None,
-        fifo_path=RESGRID_FIFO_IMAGES or None,
+        mq_path=RESGRID_MQ_IMAGES or None,
     )
 
 
-def _synthetic_resource_grid_writer_status_unlocked() -> SyntheticFifoWriterStatus:
-    """Caller must hold ``_lock``. Full-grid resource-grid FIFO **generator.py** attachment."""
+def _synthetic_resource_grid_writer_status_unlocked() -> SyntheticMqWriterStatus:
+    """Caller must hold ``_lock``. Full-grid resource-grid mq **generator.py** attachment."""
     gen_up = _generator_script_running_unlocked()
     resource_grid_fifo_ok = _plotter_resource_grid_fifo_open
     running = gen_up and resource_grid_fifo_ok and _generator_script_writes_resource_grid
     pid = _generator_script_proc.pid if running and _generator_script_proc is not None else None
     capable = _generator_resource_grid_fifo_capable_unlocked()
-    resource_grid_fifo_path = (CUDA_IQ_FIFO_PATH or "").strip() or None
-    return SyntheticFifoWriterStatus(
+    resource_grid_mq_path = (CUDA_IQ_MQ_PATH or "").strip() or None
+    return SyntheticMqWriterStatus(
         running=running,
         pid=pid,
         capable=capable,
-        fifo_path=resource_grid_fifo_path,
+        mq_path=resource_grid_mq_path,
     )
 
 
-def _synthetic_fapi_writer_status_unlocked() -> SyntheticFifoWriterStatus:
-    """Caller must hold ``_lock``. Slot / FAPI FIFO **generator.py** attachment."""
+def _synthetic_fapi_writer_status_unlocked() -> SyntheticMqWriterStatus:
+    """Caller must hold ``_lock``. Slot / FAPI mq **generator.py** attachment."""
     gen_up = _generator_script_running_unlocked()
     slot_active = _plotter_fapi_fifo_open
     running = gen_up and slot_active and _generator_script_writes_fapi
     pid = _generator_script_proc.pid if running and _generator_script_proc is not None else None
     capable = _is_plotter_running() and _plotter_fapi_fifo_open
-    return SyntheticFifoWriterStatus(
+    return SyntheticMqWriterStatus(
         running=running,
         pid=pid,
         capable=capable,
-        fifo_path=(CUDA_SLOT_FIFO_PATH or "").strip() or None,
+        mq_path=(CUDA_SLOT_MQ_PATH or "").strip() or None,
     )
 
 
@@ -2215,23 +2124,23 @@ def start_plotter_and_generators(
 
             _plotter_fapi_fifo_open = False
             _plotter_resource_grid_fifo_open = False
-            # **resgrid_plotter** always gets **--fifo-images** + **--fifo-resource-grid** + **--fifo-fapi** + **--cuda-shm** (all named pipes).
+            # **resgrid_plotter** always gets **--mq-images** + **--mq-resource-grid** + **--mq-fapi** + **--cuda-shm** (POSIX mqueues).
             use_resource_grid_fifo = True
             use_fapi_fifo = True
 
-            fifo_path = CUDA_IQ_FIFO_PATH
-            slot_fifo_path = CUDA_SLOT_FIFO_PATH
-            # Generator SHM: resource-grid / FAPI writers need producer SHM; RGBA FIFO path uses the same knob for symmetry.
+            fifo_path = CUDA_IQ_MQ_PATH
+            slot_fifo_path = CUDA_SLOT_MQ_PATH
+            # Generator SHM: resource-grid / FAPI writers need producer SHM; RGBA path uses the same knob for symmetry.
             create_fifo_producer_shm = True
 
             if CUDA_AUTO_START_IQ_GENERATOR and not _GENERATOR_SCRIPT.is_file():
                 raise FileNotFoundError(f"generator.py missing: {_GENERATOR_SCRIPT}")
 
-            _close_resource_grid_fifo_peer_hold_unlocked()
-            _recreate_plotter_fifo_node(fifo_path)
-            _open_resource_grid_fifo_peer_for_plotter_unlocked(fifo_path)
-            _recreate_plotter_fifo_node(slot_fifo_path)
-            _recreate_plotter_fifo_node(RESGRID_FIFO_IMAGES)
+            _prepare_plotter_posix_mq_unlocked(
+                iq_path=fifo_path,
+                slot_path=slot_fifo_path,
+                rgba_path=RESGRID_MQ_IMAGES,
+            )
 
             enc_i = _coerce_plotter_encoder_fps_cmd(plotter_encoder_fps)
             pipe_arg = str(CUDA_IQ_GEN_FPS).strip() or "200"
@@ -2273,37 +2182,28 @@ def start_plotter_and_generators(
                 "--raster-threads",
                 (CUDA_IQ_RASTER_THREADS or "16").strip() or "16",
             ]
-            _append_plotter_input_fifo_and_cuda_shm(
+            _append_plotter_input_mq_and_cuda_shm(
                 cmd,
                 cuda_shm_name=cuda_shm_name,
-                fifo_images_path=RESGRID_FIFO_IMAGES,
-                default_fifo_images_path=_DEFAULT_RESGRID_FIFO_IMAGES_PATH,
+                mq_images_path=RESGRID_MQ_IMAGES,
+                default_mq_images_path=_DEFAULT_RESGRID_MQ_IMAGES,
                 resource_grid_path=fifo_path,
-                slot_fifo_path=slot_fifo_path,
+                slot_mq_path=slot_fifo_path,
             )
             cmd.extend(capturer_extra)
             try:
                 _plotter_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             except OSError:
                 _log.exception("Failed to spawn %s", PLOTTER_BIN)
-                _close_resource_grid_fifo_peer_hold_unlocked()
                 _plotter_shm_destroy_unlocked()
-                if use_resource_grid_fifo:
-                    try:
-                        os.unlink(fifo_path)
-                    except OSError:
-                        pass
-                if use_fapi_fifo:
-                    try:
-                        os.unlink(slot_fifo_path)
-                    except OSError:
-                        pass
+                for p in (CUDA_IQ_MQ_PATH, CUDA_SLOT_MQ_PATH, RESGRID_MQ_IMAGES):
+                    _mq_cleanup_optional(p)
                 _plotter_fapi_fifo_open = False
                 _plotter_resource_grid_fifo_open = False
                 raise
             _spawn_cuda_stderr_thread(_plotter_process)
             _cuda_spawn_encoder_fps = enc_i
-            # All three FIFO argv flags are always passed for this spawn.
+            # All three **--mq-*** argv groups are always passed for this spawn.
             _plotter_resource_grid_fifo_open = True
             _plotter_fapi_fifo_open = True
             if capturer_dir_raw:
@@ -2311,7 +2211,7 @@ def start_plotter_and_generators(
 
             if create_fifo_producer_shm and not producer_shm_name:
                 _terminate_plotter_unlocked()
-                raise RuntimeError("internal: missing producer shared memory for generator / FIFO modes")
+                raise RuntimeError("internal: missing producer shared memory for generator / mq modes")
 
             if CUDA_AUTO_START_IQ_GENERATOR and (use_resource_grid_fifo or use_fapi_fifo):
                 try:
@@ -2320,20 +2220,10 @@ def start_plotter_and_generators(
                     )
                 except FileNotFoundError:
                     _terminate_plotter_unlocked()
-                    if use_resource_grid_fifo:
-                        try:
-                            os.unlink(fifo_path)
-                        except OSError:
-                            pass
                     raise
                 except Exception:
-                    _log.exception("Failed to spawn generator.py (resource-grid / FAPI FIFO path)")
+                    _log.exception("Failed to spawn generator.py (resource-grid / FAPI mq path)")
                     _terminate_plotter_unlocked()
-                    if use_resource_grid_fifo:
-                        try:
-                            os.unlink(fifo_path)
-                        except OSError:
-                            pass
                     raise
 
             try:
@@ -2347,13 +2237,13 @@ def start_plotter_and_generators(
                 "cwd": os.getcwd(),
                 "plotter_only": plotter_only,
                 "generation_mode": mode,
-                "plotter_fifo_inputs": "images+resource_grid+fapi",
-                "use_resource_grid_fifo": use_resource_grid_fifo,
-                "use_fapi_fifo": use_fapi_fifo,
+                "plotter_mq_inputs": "images+resource_grid+fapi",
+                "use_resource_grid_mq": use_resource_grid_fifo,
+                "use_fapi_mq": use_fapi_fifo,
                 "create_fifo_producer_shm": create_fifo_producer_shm,
-                "resgrid_fifo_images": RESGRID_FIFO_IMAGES or None,
-                "resource_grid_fifo_path": fifo_path,
-                "fapi_fifo_path": slot_fifo_path,
+                "resgrid_mq_images": RESGRID_MQ_IMAGES or None,
+                "resource_grid_mq_path": fifo_path,
+                "fapi_mq_path": slot_fifo_path,
                 "cuda_shm_name": cuda_shm_name,
                 "producer_shm_name": producer_shm_name,
                 "generator_script": str(_GENERATOR_SCRIPT),
@@ -2378,7 +2268,7 @@ def start_plotter_and_generators(
             if not _is_plotter_running():
                 raise ValueError(
                     "Start the CUDA plotter first (**POST /api/plotter/start**), "
-                    "then use **POST /api/generator/start** with **`{\"feed\":\"images\",…}`** to run **generator.py** feeding the RGBA FIFO."
+                    "then use **POST /api/generator/start** with **`{\"feed\":\"images\",…}`** to run **generator.py** feeding **RESGRID_MQ_IMAGES**."
                 )
             if _fifo_images_generator_running():
                 assert _fifo_images_generator is not None
@@ -2482,7 +2372,7 @@ def stop_plotter_and_generators(*, plotter_only: bool = False) -> GeneratorRespo
 
 
 def stop_generators() -> GeneratorResponse:
-    """Stop FFmpeg lavfi (if any), ``generator.py`` RGBA fifo feeder, and/or the resource-grid / FAPI ``generator.py`` child; leaves CUDA plotter running if active."""
+    """Stop FFmpeg lavfi (if any), ``generator.py`` RGBA mq feeder, and/or the resource-grid / FAPI ``generator.py`` child; leaves CUDA plotter running if active."""
     with _lock:
         had = False
         last_pid: Optional[int] = None
@@ -2502,7 +2392,7 @@ def stop_generators() -> GeneratorResponse:
             _terminate_generator_script_unlocked()
             had = True
         if not had:
-            _log.info("stop_generators: no FFmpeg, fifo-images, or generator.py child running")
+            _log.info("stop_generators: no FFmpeg, mq-images, or generator.py child running")
             return GeneratorResponse(status="not_running")
         _log.info("Generator / images path stopped (last pid was %s)", last_pid)
         return GeneratorResponse(status="stopped", pid=last_pid)
@@ -2560,15 +2450,15 @@ async def lifespan(app: FastAPI):
 
 def _openapi_description_with_hls(hls_index_url: str) -> str:
     return (
-        "MediaMTX (RTSP path **`live`**): **SYNTHETIC_IMAGES** = subscriber-first — with **RESGRID_FIFO_IMAGES**, use **POST /api/plotter/start** then "
-        "**POST /api/generator/start** (`generator.py` → RGBA FIFO → CUDA → RTSP; JSON **`feed`** required). "
-        "**SYNTHETIC_RESOURCE_GRID** (`resgrid_plotter`: built-in synthesizer or full-grid resource-grid FIFO → H.264), or **SYNTHETIC_FAPI** (slot messages / channel-based). "
+        "MediaMTX (RTSP path **`live`**): **SYNTHETIC_IMAGES** = subscriber-first — with **RESGRID_MQ_IMAGES**, use **POST /api/plotter/start** then "
+        "**POST /api/generator/start** (`generator.py` → RGBA POSIX mq → CUDA → RTSP; JSON **`feed`** required). "
+        "**SYNTHETIC_RESOURCE_GRID** (`resgrid_plotter`: built-in synthesizer or full-grid resource-grid mq → H.264), or **SYNTHETIC_FAPI** (slot messages / channel-based). "
         f"**HLS manifest:** [{hls_index_url}]({hls_index_url}) "
         "(host is taken from **this** request to `/openapi.json`: `Origin` / `Referer`, `X-Forwarded-Host`, `Host`, or the URL host — "
         f"same order as **GET /api/plotter/playback**; if none apply, **`{MTX_PUBLIC_HTTP_BASE}`**). "
         "Dual DL/UL stacks use **`live_dl`** / **`live_ul`** — use **GET /api/plotter/playback** for this backend’s paths. "
-        "**Start / stop:** **POST /api/generator/start** (RGBA **images** FIFO, needs **RESGRID_FIFO_IMAGES** + running plotter), **POST /api/plotter/start** (always opens **images** + **resource_grid** + **FAPI** FIFO argv), "
-        "or **POST /api/generator/start** with **`{{\"feed\":\"resource_grid\"}}`** / **`{{\"feed\":\"fapi\"}}`** for **generator.py** on those FIFOs. **POST /api/stop** stops the plotter and standalone FFmpeg."
+        "**Start / stop:** **POST /api/generator/start** (RGBA **images** mq, needs **RESGRID_MQ_IMAGES** + running plotter), **POST /api/plotter/start** (always passes **--mq-images** + **--mq-resource-grid** + **--mq-fapi**), "
+        "or **POST /api/generator/start** with **`{{\"feed\":\"resource_grid\"}}`** / **`{{\"feed\":\"fapi\"}}`** for **generator.py** on those mqueues. **POST /api/stop** stops the plotter and standalone FFmpeg."
     )
 
 
@@ -2628,8 +2518,8 @@ def health():
     tags=["generator"],
     summary="Generator processes and process GENERATION_MODE",
     description=(
-        "Process **GENERATION_MODE** plus **synthetic_video** (RGBA FIFO **generator.py** / legacy FFmpeg lavfi) and "
-        "**synthetic_resource_grid** and **synthetic_fapi** (resource-grid / FAPI FIFO **generator.py** writers). CUDA **resgrid_plotter** metrics: **GET /api/plotter/status**."
+        "Process **GENERATION_MODE** plus **synthetic_video** (RGBA **generator.py** / legacy FFmpeg lavfi) and "
+        "**synthetic_resource_grid** and **synthetic_fapi** (resource-grid / FAPI **generator.py** mq writers). CUDA **resgrid_plotter** metrics: **GET /api/plotter/status**."
     ),
 )
 def api_generator_status():
@@ -2660,7 +2550,7 @@ def _generator_fps_api_response_unlocked() -> GeneratorFpsResponse:
         max_fps=IQ_PRODUCER_FPS_MAX,
         generation_mode=get_generation_mode(),
         generating=_is_plotter_running(),
-        iq_fifo_mode=_resource_grid_fifo_enabled_unlocked(),
+        iq_mq_mode=True,
     )
 
 
@@ -2671,7 +2561,7 @@ def _generator_fps_api_response_unlocked() -> GeneratorFpsResponse:
     summary="Generator producer FPS (commanded)",
     description=(
         "Reads commanded producer FPS from generator SHM (when running) or saved override / env default. "
-        "Applies to **SYNTHETIC_RESOURCE_GRID** and **SYNTHETIC_FAPI** (internal CUDA synthesizer and/or Python FIFO writer)."
+        "Applies to **SYNTHETIC_RESOURCE_GRID** and **SYNTHETIC_FAPI** (internal CUDA synthesizer and/or Python mq writer)."
     ),
 )
 def api_generator_fps_get():
@@ -2690,7 +2580,7 @@ def api_generator_fps_get():
     tags=["generator"],
     summary="Set generator producer FPS (commanded)",
     description=(
-        "Writes **fps** to generator SHM (Python FIFO mode) and CUDA SHM (offset 24, internal synthesizer) when running; "
+        "Writes **fps** to generator SHM (Python mq mode) and CUDA SHM (offset 24, internal synthesizer) when running; "
         "otherwise stores an override applied on the next plotter **Start**."
     ),
 )
@@ -2710,11 +2600,10 @@ def api_generator_fps_put(body: GeneratorFpsPutBody):
 
 
 def _generator_start_handler_fapi_slot() -> GeneratorControlResponse:
-    """Spawn **generator.py** with **``--slot-only``** (FAPI / slot FIFO only; no full-grid writes).
+    """Spawn **generator.py** with **``--slot-only``** (FAPI / slot POSIX mq only; no full-grid writes).
 
-    The FastAPI process holds the resource-grid FIFO open **O_RDWR** (see **``_open_resource_grid_fifo_peer_for_plotter_unlocked``**)
-    when the plotter starts so **resgrid_plotter**'s blocking **open(O_RDONLY)** on that pipe still succeeds; the plotter sidecar
-    then blocks in **read** until a combined/resource-grid producer is used, while slot messages alone drive the raster.
+    Requires **resgrid_plotter** already running with **``--mq-fapi``** so **generator.py** can open the slot mq **O_WRONLY**
+    (see ``backend/app/resgrid_posix_mq.py``).
     """
     with _lock:
         if _generator_script_proc is not None and _generator_script_proc.poll() is None:
@@ -2731,7 +2620,7 @@ def _generator_start_handler_fapi_slot() -> GeneratorControlResponse:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "Plotter is running but FIFO attach flags are off (internal state). **POST /api/plotter/stop** then **POST /api/plotter/start**."
+                    "Plotter is running but mq attach flags are off (internal state). **POST /api/plotter/stop** then **POST /api/plotter/start**."
                 ),
             )
         try:
@@ -2749,7 +2638,7 @@ def _generator_start_handler_fapi_slot() -> GeneratorControlResponse:
 
 
 def _generator_start_handler_resource_grid() -> GeneratorControlResponse:
-    """Spawn **generator.py** writing **only** the resource-grid FIFO (``--fifo-resource-grid``)."""
+    """Spawn **generator.py** writing **only** the resource-grid mq (``--mq-resource-grid``)."""
     with _lock:
         if _generator_script_proc is not None and _generator_script_proc.poll() is None:
             return GeneratorControlResponse(status="already_running", pid=_generator_script_proc.pid)
@@ -2765,7 +2654,7 @@ def _generator_start_handler_resource_grid() -> GeneratorControlResponse:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "The running **resgrid_plotter** did not mark the resource-grid FIFO as open (internal state). "
+                    "The running **resgrid_plotter** did not mark the resource-grid mq as open (internal state). "
                     "**POST /api/plotter/stop** then **POST /api/plotter/start** again. "
                     "For slot-only demos use **POST /api/generator/start** with **`{\"feed\":\"fapi\"}`**."
                 ),
@@ -2789,12 +2678,12 @@ def _generator_start_handler_resource_grid() -> GeneratorControlResponse:
     response_model=Union[PlotterControlResponse, GeneratorLavfiStartResponse],
     response_model_exclude_none=True,
     tags=["generator"],
-    summary="Start generator.py (images, resource grid, or FAPI FIFO)",
+    summary="Start generator.py (images, resource grid, or FAPI mq)",
     description=(
-        "Set **`feed`**: **images** (RGBA FIFO **generator.py**; optional nested **`images`** with **`pattern`** / **`preset`**), "
-        "**resource_grid** (full-grid resource-grid named pipe writer only), or **fapi** (slot / FAPI FIFO only — no "
+        "Set **`feed`**: **images** (RGBA **generator.py**; optional nested **`images`** with **`pattern`** / **`preset`**), "
+        "**resource_grid** (full-grid resource-grid mq writer only), or **fapi** (slot / FAPI mq only — no "
         "full-grid I/Q stream from **generator.py**). CUDA plotter must already be running. "
-        "**400** on invalid body, missing FIFO for images mode, or plotter not running where required. "
+        "**400** on invalid body, missing **RESGRID_MQ_IMAGES** for images mode, or plotter not running where required. "
         "**200** JSON omits **null** fields. **`feed`:** **`images`** includes **`lavfi_video`** / **`source`** when applicable; **`resource_grid`** / **`fapi`** return **`status`**, **`pid`**, and **`feed`** only."
     ),
 )
@@ -2832,7 +2721,7 @@ def api_generator_start(body: GeneratorStartBody):
     tags=["generator"],
     summary="Stop generator.py and/or FFmpeg lavfi (images path)",
     description=(
-        "Stops **FFmpeg** lavfi (if any), **generator.py** on **RESGRID_FIFO_IMAGES**, and the **resource_grid** / **fapi** **generator.py** child "
+        "Stops **FFmpeg** lavfi (if any), **generator.py** on **RESGRID_MQ_IMAGES**, and the **resource_grid** / **fapi** **generator.py** child "
         "when running. Does **not** stop **resgrid_plotter**. Use **POST /api/stop** to stop the plotter too."
     ),
 )
@@ -2880,7 +2769,7 @@ def api_generator_channel_legend():
     summary="Set synthetic resource-grid pattern",
     description=(
         "Writes pattern id to **generator** and **CUDA** control shared memory (uint32 @ offset 16). "
-        "**SYNTHETIC_RESOURCE_GRID** only (**built-in** or **FIFO** path). Not used in **SYNTHETIC_FAPI** (slot mode)."
+        "**SYNTHETIC_RESOURCE_GRID** only (**built-in** or **mq** path). Not used in **SYNTHETIC_FAPI** (slot mode)."
     ),
 )
 def api_generator_pattern_put(body: GeneratorPatternPutBody):
@@ -3101,8 +2990,8 @@ def api_stop_all(body: StopAllBody = StopAllBody()):
     tags=["plotter"],
     summary="Start CUDA plotter only",
     description=(
-        "Start **`resgrid_plotter`** with **all** input FIFOs: **--fifo-images**, **--fifo-resource-grid**, **--fifo-fapi** "
-        "(paths from env). The plotter ingests **all** FIFO inputs; **generator.py** chooses one producer at a time via **POST /api/generator/start** ``feed`` / ``--data-mode``. "
+        "Start **`resgrid_plotter`** with **all** input POSIX mqueues: **--mq-images**, **--mq-resource-grid**, **--mq-fapi** "
+        "(paths from env). The plotter ingests **all** mq streams; **generator.py** chooses one producer at a time via **POST /api/generator/start** ``feed`` / ``--data-mode``. "
         "(**GENERATION_MODE** on **GET /api/generator/status** applies to the Python generator workflow). "
         "Optional JSON body: only **`encoder_fps`** (or empty **`{}`**). It overrides **CUDA_IQ_FPS** for **`--encoder-fps`**; pipeline **`--fps`** stays **CUDA_IQ_GEN_FPS**. "
         "Legacy **`mode`** or any other key returns **422**. "
@@ -3135,7 +3024,7 @@ def api_plotter_start(body: PlotterStartBody = PlotterStartBody()):
     tags=["plotter"],
     summary="Stop CUDA plotter only",
     description=(
-        "Terminate **`resgrid_plotter`** only. Does **not** stop **generator.py** (RGBA FIFO or FIFO writer); use **POST /api/generator/stop** "
+        "Terminate **`resgrid_plotter`** only. Does **not** stop **generator.py** (RGBA mq or IQ/slot mq writers); use **POST /api/generator/stop** "
         "or **POST /api/stop** as appropriate. "
         "Response: **`status`**, optional **`pid`**. Process **GENERATION_MODE**: **GET /api/generator/status**."
     ),

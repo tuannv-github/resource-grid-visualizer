@@ -51,7 +51,7 @@ export class ResgridApi {
         lavfi_video: lavfi,
         video_generator_source: syn.source ?? null,
         video_generator_running: syn.running === true,
-        video_generator_fifo_path: fifoPath(syn.fifo_path),
+        video_generator_mq_path: fifoPath(syn.mq_path),
         iq_generator_running: iqRun,
         iq_generator_capable: iqCap,
         synthetic_resource_grid: g
@@ -59,7 +59,7 @@ export class ResgridApi {
               running: srg.running === true,
               capable: srg.capable === true,
               pid: fifoWriterPid(srg.pid),
-              fifo_path: fifoPath(srg.fifo_path),
+              mq_path: fifoPath(srg.mq_path),
             }
           : undefined,
         synthetic_fapi: g
@@ -67,7 +67,7 @@ export class ResgridApi {
               running: sfa.running === true,
               capable: sfa.capable === true,
               pid: fifoWriterPid(sfa.pid),
-              fifo_path: fifoPath(sfa.fifo_path),
+              mq_path: fifoPath(sfa.mq_path),
             }
           : undefined,
       } as PublisherStatus;

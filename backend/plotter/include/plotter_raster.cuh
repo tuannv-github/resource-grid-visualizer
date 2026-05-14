@@ -12,6 +12,8 @@
 #include <unordered_map>
 #include <vector>
 
+class ResgridMqStreamIn;
+
 class CapturerStage;
 
 /** One grid to rasterize in pool mode; `seq` preserves assembler→encoder order at the RGBA queue. */
@@ -36,7 +38,7 @@ class RasterWorkQueue {
   std::deque<RasterWorkItem> q_;
 };
 
-/** CUDA raster + optional multi-thread pool; standalone ``--fifo-resource-grid`` uses `raster_attach_full_grid_fifo_reader` + `raster_run`. */
+/** CUDA raster + optional multi-thread pool; standalone ``--mq-resource-grid`` uses `raster_attach_full_grid_mq_reader` + `raster_run`. */
 class RasterStage {
  public:
   void raster_configure(int rt, size_t rgba_bytes, InternalFrameQueue* internal_q, FullGridFifoQueue* full_grid_q,
@@ -51,8 +53,8 @@ class RasterStage {
   /** Pool mode (`rt` > 1): work queue between acquirer and workers; clears per-thread IQ/RGBA queue pointers. */
   void raster_configure_pool(RasterWorkQueue* work_q);
 
-  /** Standalone ``--fifo-resource-grid`` (no FAPI): FIFO read end owned by raster — spawns FIFO→`FullGridFifoQueue` thread alongside consumer(s). Call after `raster_configure`. */
-  void raster_attach_full_grid_fifo_reader(int iq_fd, bool resource_grid_slot_iq_stream);
+  /** Standalone ``--mq-resource-grid`` (no FAPI): MQ read end owned by raster — spawns MQ→`FullGridFifoQueue` thread alongside consumer(s). Call after `raster_configure`. */
+  void raster_attach_full_grid_mq_reader(ResgridMqStreamIn* iq_mq, bool resource_grid_slot_iq_stream);
 
   /** Single-thread main or pool supervisor (merger + acquirer + workers). */
   void raster_run();
@@ -119,6 +121,6 @@ class RasterStage {
   uint64_t pool_acquire_issued_end_ = 0;
   bool pool_acquire_done_ = false;
 
-  int full_grid_fifo_reader_fd_ = -1;
-  bool full_grid_fifo_reader_slot_stream_ = false;
+  ResgridMqStreamIn* full_grid_mq_reader_ = nullptr;
+  bool full_grid_mq_reader_slot_stream_ = false;
 };

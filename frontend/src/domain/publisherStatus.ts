@@ -7,7 +7,7 @@ export type GenerationStats = {
 
 /**
  * Merged view of **GET /api/plotter/status** plus **GET /api/generator/status** fields the UI needs
- * (plotter metrics + generator mode / FIFO slices).
+ * (plotter metrics + generator mode / mq slices).
  */
 export type PublisherStatus = {
   /** Backend **`generation_mode`** (process **GENERATION_MODE**), mapped to **`mode`** for the UI. */
@@ -19,7 +19,7 @@ export type PublisherStatus = {
   lavfi_video: string | null;
   /** Preset id from `source` when the video generator (FFmpeg or RGBA FIFO feeder) is active; null for env default / custom graph. */
   video_generator_source?: string | null;
-  /** True while generator.py (RGBA FIFO) or legacy FFmpeg lavfi is publishing; independent of `video_generator_source`. */
+  /** True while generator.py (RGBA mq) or legacy FFmpeg lavfi is publishing; independent of `video_generator_source`. */
   video_generator_running?: boolean;
   stats: GenerationStats | null;
   publish_rtsp: string;
@@ -31,22 +31,22 @@ export type PublisherStatus = {
   iq_producer_command_fps?: number | null;
   iq_generator_running?: boolean;
   iq_generator_capable?: boolean;
-  /** From **GET /api/generator/status** `synthetic_video` (named pipe for RGBA **generator.py**). */
-  video_generator_fifo_path?: string | null;
-  /** Resource-grid IQ FIFO writer slice (server **synthetic_resource_grid**). */
+  /** From **GET /api/generator/status** `synthetic_video` (POSIX mq name for RGBA **generator.py**). */
+  video_generator_mq_path?: string | null;
+  /** Resource-grid IQ mq writer slice (server **synthetic_resource_grid**). */
   synthetic_resource_grid?: {
     running: boolean;
     capable: boolean;
     /** **generator.py** OS pid when **running** (from server). */
     pid?: number | null;
-    fifo_path?: string | null;
+    mq_path?: string | null;
   };
-  /** Slot / FAPI FIFO writer slice (server **synthetic_fapi**). */
+  /** Slot / FAPI mq writer slice (server **synthetic_fapi**). */
   synthetic_fapi?: {
     running: boolean;
     capable: boolean;
     pid?: number | null;
-    fifo_path?: string | null;
+    mq_path?: string | null;
   };
   /** CUDA SHM @40 Hz */
   assembly_input_msg_s?: number | null;

@@ -12,7 +12,7 @@
 # No container swap: `memswap_limit` must equal `memory` — Docker’s total cap is RAM+swap; equal values ⇒ swap room is 0 (not “8g of swap”).
 # CPU-only (no GPU): remove the `deploy:` block under `backend`, set `VIDEO_ENCODER=cpu`, drop NVIDIA_* env vars.
 #
-# Default generation mode is SYNTHETIC_FAPI (slot messages / resgrid_plotter --data-mode 3 + slot FIFO).
+# Default generation mode is SYNTHETIC_FAPI (slot messages / resgrid_plotter --data-mode 3 + slot mq).
 # AUTO_START defaults to 0 (idle on boot); set AUTO_START=1 to start the CUDA plotter (or FFmpeg when GENERATION_MODE=SYNTHETIC_IMAGES) after boot.
 # generator.py is NOT started unless CUDA_AUTO_START_IQ_GENERATOR=1 (default 0); use the API/UI generator group.
 # Override with GENERATION_MODE=SYNTHETIC_RESOURCE_GRID or SYNTHETIC_IMAGES. Historic SYNTHETIC_VIDEO / SYNTHETIC_IQ / SYNTHETIC_CHANNEL_BASED are still accepted by the server.
@@ -23,9 +23,9 @@
 #
 # Ports: 8888 HLS, 8889 WHEP/WHIP (HTTP), 8189/tcp+udp WebRTC ICE, 8081 API, 5173 UI, 8554 RTSP.
 #
-# FIFOs (FAPI slot + optional IQ): default paths are /tmp/fapi.fifo and /tmp/resource_grid.fifo
-# inside the backend container. Bind-mount host dir `host-tmp/` (repo: resouce-grid/host-tmp) onto /tmp via
-# RESGRID_HOST_TMP (default ../host-tmp) so OAI or other host tools can share the same named pipes (see nws compose).
+# POSIX mqueues (FAPI slot + optional IQ + RGBA): default names /resgrid_slot, /resgrid_iq, /resgrid_rgba.
+# `ipc: host` shares the host IPC namespace so host writers (e.g. cuPHY/cuBB) see the same mq objects as the plotter.
+# Bind-mount RESGRID_HOST_TMP → /tmp for FIFOs/files; mq names are not files under /tmp.
 #
 # File capturer (JPEG): host dir `encoder-snaps/` → container /encoder-snaps via RESGRID_HOST_CAPTURER_SNAPS
 # (default ../encoder-snaps); RESGRID_CAPTURER_DIR defaults to /encoder-snaps. Restart the plotter after changing.
@@ -37,6 +37,8 @@ include:
 
 services:
   backend:
+    # Host IPC: POSIX mq namespace matches host cuPHY/cuBB; PHY **containers** need `ipc: host` (or join backend IPC) too.
+    ipc: host
     build:
       context: ..
       dockerfile: backend/Dockerfile
@@ -69,14 +71,10 @@ services:
       CUDA_IQ_PRESET: ${CUDA_IQ_PRESET:-p4}
       CUDA_IQ_PRB: ${CUDA_IQ_PRB:-133}
       CUDA_IQ_SYMBOLS: ${CUDA_IQ_SYMBOLS:-14}
-      CUDA_IQ_USE_FIFO: ${CUDA_IQ_USE_FIFO:-1}
-      CUDA_IQ_FIFO_PATH: ${CUDA_IQ_FIFO_PATH:-/tmp/resource_grid.fifo}
+      CUDA_IQ_MQ_PATH: ${CUDA_IQ_MQ_PATH:-/resgrid_iq}
+      CUDA_SLOT_MQ_PATH: ${CUDA_SLOT_MQ_PATH:-/resgrid_slot}
+      RESGRID_MQ_IMAGES: ${RESGRID_MQ_IMAGES:-/resgrid_rgba}
       CUDA_IQ_GEN_FPS: ${CUDA_IQ_GEN_FPS:-200}
-      CUDA_SLOT_USE_FIFO: ${CUDA_SLOT_USE_FIFO:-0}
-      CUDA_SLOT_FIFO_PATH: ${CUDA_SLOT_FIFO_PATH:-/tmp/fapi.fifo}
-      RESGRID_FIFO_IMAGES: ${RESGRID_FIFO_IMAGES:-/tmp/images.fifo}
-      RESGRID_FIFO_CHOWN: ${RESGRID_FIFO_CHOWN:-}
-      RESGRID_FIFO_CHOWN_DISABLE: ${RESGRID_FIFO_CHOWN_DISABLE:-0}
       RESGRID_CAPTURER_DIR: ${RESGRID_CAPTURER_DIR:-/encoder-snaps}
       MTX_PUBLIC_HTTP_BASE: ${MTX_PUBLIC_HTTP_BASE:-http://localhost:8888}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
@@ -94,7 +92,7 @@ services:
       - "8081:8081"
     volumes:
       # resouce-grid/host-tmp → container /tmp (relative to this compose file). Same mount path on OAI gNB
-      # (nws/docker-compose.oai*.yaml) uses RESGRID_SLOT_FIFO_PATH_DL/UL to match dlul plotters when applicable.
+      # (nws/docker-compose.oai*.yaml) may use CUDA_IQ_MQ_PATH_DL/UL to match dlul backends when applicable.
       - ${RESGRID_HOST_TMP:-../host-tmp}:/tmp
       - ${RESGRID_HOST_CAPTURER_SNAPS:-../encoder-snaps}:/encoder-snaps
       - ../backend/app:/app/app
@@ -122,7 +120,7 @@ services:
         - action: rebuild
           path: ../backend/plotter/include/plotter_common.cuh
         - action: rebuild
-          path: ../backend/plotter/include/viridis_lut.inc
+          path: ../backend/app/resgrid_posix_mq.py
 
   frontend:
     # Distinct name avoids reusing an image built earlier from frontend/Dockerfile (nginx).

@@ -3,6 +3,7 @@
  */
 #include "plotter_common.cuh"
 #include "plotter_encoder.cuh"
+#include "plotter_posix_mq.cuh"
 
 #include <algorithm>
 #include <chrono>
@@ -111,27 +112,6 @@ bool write_rgba_to_ffmpeg_fd(int ff_pipe_fd, void* fps_base, size_t rgba_bytes, 
   return true;
 }
 
-bool read_exact_rgba_fd(int fd, uint8_t* buf, size_t n) {
-  size_t got = 0;
-  while (got < n && g_run.load(std::memory_order_relaxed)) {
-    const ssize_t r = ::read(fd, buf + got, n - got);
-    if (r < 0) {
-      if (errno == EINTR) continue;
-      fprintf(stderr, "resgrid_plotter: --fifo-images read error at %zu/%zu: %s\n", got, n, strerror(errno));
-      return false;
-    }
-    if (r == 0) {
-      if (got == 0)
-        fprintf(stderr, "resgrid_plotter: --fifo-images EOF (writer closed)\n");
-      else
-        fprintf(stderr, "resgrid_plotter: --fifo-images EOF mid-frame (%zu/%zu bytes)\n", got, n);
-      return false;
-    }
-    got += (size_t)r;
-  }
-  return got == n && g_run.load(std::memory_order_relaxed);
-}
-
 }  // namespace
 
 struct EncoderStage::Impl {
@@ -139,9 +119,9 @@ struct EncoderStage::Impl {
   pid_t ff_pid_ = -1;
   bool spawn_ok_ = false;
   std::mutex write_mtx_;
-  std::string fifo_path_;
+  std::string mq_name_;
   std::thread q_th_;
-  std::thread f_th_;
+  std::thread m_th_;
 
   bool write_rgba_locked(const uint8_t* rgba, size_t nbytes) {
     std::lock_guard<std::mutex> lk(write_mtx_);
@@ -246,19 +226,18 @@ struct EncoderStage::Impl {
     fprintf(stderr, "resgrid_plotter: Encoder queue-input thread exiting\n");
   }
 
-  void fifo_thread() {
-    if (fifo_path_.empty()) return;
-    fprintf(stderr, "resgrid_plotter: --fifo-images opening %s (%zu bytes/frame)\n", fifo_path_.c_str(),
-            ctx_.rgba_bytes);
-    const int in_fd = open(fifo_path_.c_str(), O_RDONLY);
-    if (in_fd < 0) {
-      perror("resgrid_plotter open --fifo-images");
+  void mq_images_thread() {
+    if (mq_name_.empty()) return;
+    fprintf(stderr, "resgrid_plotter: --mq-images opening %s (%zu bytes/frame)\n", mq_name_.c_str(), ctx_.rgba_bytes);
+    ResgridMqStreamIn mq;
+    if (!mq.open_read(mq_name_.c_str())) {
+      perror("resgrid_plotter open --mq-images");
       g_run.store(false, std::memory_order_relaxed);
       return;
     }
     std::vector<uint8_t> buf(ctx_.rgba_bytes);
     while (g_run.load(std::memory_order_relaxed)) {
-      if (!read_exact_rgba_fd(in_fd, buf.data(), ctx_.rgba_bytes)) {
+      if (!mq.read_exact(buf.data(), ctx_.rgba_bytes, "--mq-images rgba")) {
         g_run.store(false, std::memory_order_relaxed);
         break;
       }
@@ -267,14 +246,14 @@ struct EncoderStage::Impl {
         break;
       }
     }
-    close(in_fd);
-    fprintf(stderr, "resgrid_plotter: --fifo-images feed exiting\n");
+    mq.close();
+    fprintf(stderr, "resgrid_plotter: --mq-images feed exiting\n");
   }
 };
 
 EncoderStage::EncoderStage(const char* rtsp_url, int frame_w, int frame_h, int encoder_fps, const char* preset,
                    EncodePolicy enc_pol, int pipeline_fps, bool use_nvenc, void* fps_base, size_t rgba_npixels,
-                   size_t rgba_bytes, RgbaFrameQueue* rgba_q, const char* fifo_images_path, bool fapi_slot_path,
+                   size_t rgba_bytes, RgbaFrameQueue* rgba_q, const char* mq_images_path, bool fapi_slot_path,
                    bool resource_grid_slot_iq_stream)
     : impl_(std::make_unique<Impl>()) {
   impl_->ctx_.rgba_q = rgba_q;
@@ -293,7 +272,7 @@ EncoderStage::EncoderStage(const char* rtsp_url, int frame_w, int frame_h, int e
     impl_->ctx_.mean_acc_b.assign(rgba_npixels, 0.f);
     impl_->ctx_.mean_acc_a.assign(rgba_npixels, 0u);
   }
-  if (fifo_images_path && fifo_images_path[0]) impl_->fifo_path_ = fifo_images_path;
+  if (mq_images_path && mq_images_path[0]) impl_->mq_name_ = mq_images_path;
 
   const int fd =
       fork_ffmpeg_rtsp_stdin(rtsp_url, frame_w, frame_h, encoder_fps, preset, &impl_->ff_pid_, enc_pol, pipeline_fps,
@@ -306,13 +285,13 @@ EncoderStage::EncoderStage(const char* rtsp_url, int frame_w, int frame_h, int e
   impl_->spawn_ok_ = true;
 
   impl_->q_th_ = std::thread([p = impl_.get()] { p->queue_thread(); });
-  impl_->f_th_ = std::thread([p = impl_.get()] { p->fifo_thread(); });
+  impl_->m_th_ = std::thread([p = impl_.get()] { p->mq_images_thread(); });
 }
 
 EncoderStage::~EncoderStage() {
   if (!impl_) return;
   if (impl_->q_th_.joinable()) impl_->q_th_.join();
-  if (impl_->f_th_.joinable()) impl_->f_th_.join();
+  if (impl_->m_th_.joinable()) impl_->m_th_.join();
   if (impl_->ctx_.ff_pipe_fd >= 0) {
     close(impl_->ctx_.ff_pipe_fd);
     impl_->ctx_.ff_pipe_fd = -1;
@@ -329,5 +308,5 @@ bool EncoderStage::ok() const { return impl_ && impl_->spawn_ok_; }
 void EncoderStage::join() {
   if (!impl_) return;
   if (impl_->q_th_.joinable()) impl_->q_th_.join();
-  if (impl_->f_th_.joinable()) impl_->f_th_.join();
+  if (impl_->m_th_.joinable()) impl_->m_th_.join();
 }

@@ -1,10 +1,12 @@
 /*
  * Runtime launch: SHM map, stats thread, FIFO-only path, IQ + CUDA raster + assembler + encoder join/shutdown.
  */
+#include "plotter_posix_mq.cuh"
 #include "plotter_pipeline.cuh"
 
 #include <algorithm>
 #include <fcntl.h>
+#include <memory>
 #include <signal.h>
 #include <sys/mman.h>
 #include <thread>
@@ -42,7 +44,7 @@ struct FpsShmMap {
 };
 
 static void pipeline_stage_output_stats_main(void* fps_base, bool internal_synth_active, CapturerStage* capturer_ptr,
-                                             bool fifo_images_telemetry) {
+                                             bool mq_images_telemetry) {
   constexpr size_t kAssemblerIn = 40;
   constexpr size_t kAssemblerOut = 48;
   constexpr size_t kRasterIn = 56;
@@ -71,7 +73,7 @@ static void pipeline_stage_output_stats_main(void* fps_base, bool internal_synth
       const double assembler_out_hz = (double)(a_out1 - a_out0) / dt;
       const double raster_out_hz = (double)(r_out1 - r_out0) / dt;
       const double enc_out_hz = (double)(e_out1 - e_out0) / dt;
-      if (fifo_images_telemetry) {
+      if (mq_images_telemetry) {
         fps_shm_store(fps_base, 8, enc_out_hz);
         fps_shm_store(fps_base, kAssemblerIn, 0.0);
         fps_shm_store(fps_base, kAssemblerOut, 0.0);
@@ -102,9 +104,9 @@ int plotter_run_launch(const PlotterLaunchConfig& cfg) {
   const size_t rgba_npixels = (size_t)cfg.frame_w * (size_t)cfg.frame_h;
   const size_t rgba_bytes = rgba_npixels * 4u;
 
-  if (cfg.fifo_images_only) {
+  if (cfg.mq_images_only) {
     if (cfg.enc_pol == EncodePolicy::Mean) {
-      fprintf(stderr, "%s: --fifo-images is incompatible with --encode-policy mean\n", cfg.prog);
+      fprintf(stderr, "%s: --mq-images is incompatible with --encode-policy mean\n", cfg.prog);
       return 1;
     }
     signal(SIGINT, on_sig);
@@ -112,11 +114,11 @@ int plotter_run_launch(const PlotterLaunchConfig& cfg) {
     FpsShmMap fps_map_img(cfg.cuda_shm_name);
     void* fps_base_img = fps_map_img.ptr();
     fprintf(stderr,
-            "resgrid_plotter: --fifo-images %dx%d encoder_fps=%d %s -> %s\n", cfg.frame_w, cfg.frame_h,
+            "resgrid_plotter: --mq-images %dx%d encoder_fps=%d %s -> %s\n", cfg.frame_w, cfg.frame_h,
             cfg.encoder_fps, cfg.video_encoder_nvenc ? "h264_nvenc" : "libx264", cfg.rtsp.c_str());
     EncoderStage encoder_stage(cfg.rtsp.c_str(), cfg.frame_w, cfg.frame_h, cfg.encoder_fps, cfg.preset.c_str(), cfg.enc_pol,
                     cfg.fps, cfg.video_encoder_nvenc, fps_base_img, rgba_npixels, rgba_bytes, nullptr,
-                    cfg.fifo_images.c_str(), false, false);
+                    cfg.mq_images.c_str(), false, false);
     if (!encoder_stage.ok()) {
       fprintf(stderr, "failed to spawn ffmpeg\n");
       return 1;
@@ -134,8 +136,8 @@ int plotter_run_launch(const PlotterLaunchConfig& cfg) {
   signal(SIGINT, on_sig);
   signal(SIGTERM, on_sig);
 
-  int iq_fd_full_grid = -1;
-  int iq_fd_sidecar = -1;
+  ResgridMqStreamIn* iq_mq_full_grid = nullptr;
+  ResgridMqStreamIn* iq_mq_sidecar = nullptr;
   std::unique_ptr<InternalFrameQueue> internal_q;
   std::unique_ptr<FullGridFifoQueue> full_grid_fifo_q;
   std::unique_ptr<AssembledSlotQueue> slot_assembled_q;
@@ -175,18 +177,18 @@ int plotter_run_launch(const PlotterLaunchConfig& cfg) {
     slot_assembled_q = std::make_unique<AssembledSlotQueue>(std::max(1, cfg.qdepth));
     if (cfg.have_res) {
       iq_sidecar_q = std::make_unique<ChannelModeIqSidecarQueue>(cfg.qdepth);
-      iq_fd_sidecar = AssemblerStage::assembler_open_iq_fifo_read_end(
-          cfg.fifo_resource_grid.c_str(), "resource-grid FIFO as FAPI I/Q sidecar (one grid per message)");
-      if (iq_fd_sidecar < 0) {
+      iq_mq_sidecar = AssemblerStage::assembler_open_iq_mq_reader(
+          cfg.mq_resource_grid.c_str(), "resource-grid MQ as FAPI I/Q sidecar (one grid per message)");
+      if (!iq_mq_sidecar) {
         free_raster_cuda_bufs();
         return 1;
       }
     }
   } else if (cfg.have_res) {
     full_grid_fifo_q = std::make_unique<FullGridFifoQueue>(cfg.qdepth);
-    iq_fd_full_grid = AssemblerStage::assembler_open_iq_fifo_read_end(
-        cfg.fifo_resource_grid.c_str(), "full-grid resource-grid FIFO (one grid per message)");
-    if (iq_fd_full_grid < 0) {
+    iq_mq_full_grid = AssemblerStage::assembler_open_iq_mq_reader(cfg.mq_resource_grid.c_str(),
+                                                                  "full-grid resource-grid MQ (one grid per message)");
+    if (!iq_mq_full_grid) {
       free_raster_cuda_bufs();
       return 1;
     }
@@ -209,8 +211,8 @@ int plotter_run_launch(const PlotterLaunchConfig& cfg) {
   if (cfg.enc_pol == EncodePolicy::Mean) pol_name = "mean";
   else if (cfg.enc_pol == EncodePolicy::FfmpegFilter) pol_name = "ffmpeg";
   fprintf(stderr,
-          "resgrid_plotter PRB=%d symbols=%d content=%dx%d cs=(%.4f,%.4f) square=%d letterbox=%d fifo_resource_grid=%d "
-          "fifo_fapi=%d internal_synth=%d fapi_slot_path=%d rg_slot_stream=%d raster_threads=%d -> %dx%d pipeline_fps=%d "
+          "resgrid_plotter PRB=%d symbols=%d content=%dx%d cs=(%.4f,%.4f) square=%d letterbox=%d mq_resource_grid=%d "
+          "mq_fapi=%d internal_synth=%d fapi_slot_path=%d rg_slot_stream=%d raster_threads=%d -> %dx%d pipeline_fps=%d "
           "encoder_fps=%d "
           "encode_policy=%s "
           "video_codec=%s mag_scale=%g -> %s\n",
@@ -254,25 +256,27 @@ int plotter_run_launch(const PlotterLaunchConfig& cfg) {
     raster_stage.raster_configure_pool(raster_work_q.get());
   }
 
-  if (full_grid_fifo_q && !cfg.have_fapi && iq_fd_full_grid >= 0)
-    raster_stage.raster_attach_full_grid_fifo_reader(iq_fd_full_grid, cfg.resource_grid_slot_stream);
+  if (full_grid_fifo_q && !cfg.have_fapi && iq_mq_full_grid)
+    raster_stage.raster_attach_full_grid_mq_reader(iq_mq_full_grid, cfg.resource_grid_slot_stream);
 
   AssemblerStage assembler_stage;
-  std::string fifo_fapi_arg = cfg.fifo_fapi;
+  std::string mq_fapi_arg = cfg.mq_fapi;
   assembler_stage.assembler_configure(internal_q.get(), fps_base, cfg.fps, ncells, cfg.prb, cfg.sym,
-                             slot_assembled_q.get(), &fifo_fapi_arg, iq_sidecar_q.get(), iq_fd_sidecar);
+                             slot_assembled_q.get(), &mq_fapi_arg, iq_sidecar_q.get(), iq_mq_sidecar);
 
   std::thread stats_th(pipeline_stage_output_stats_main, fps_base, internal_q.get() != nullptr, capturer_ptr, false);
 
-  const char* const fifo_img_arg = cfg.fifo_images.empty() ? "" : cfg.fifo_images.c_str();
+  const char* const mq_img_arg = cfg.mq_images.empty() ? "" : cfg.mq_images.c_str();
   std::unique_ptr<EncoderStage> encoder_stage = std::make_unique<EncoderStage>(
       cfg.rtsp.c_str(), cfg.frame_w, cfg.frame_h, cfg.encoder_fps, cfg.preset.c_str(), cfg.enc_pol, cfg.fps,
-      cfg.video_encoder_nvenc, fps_base, rgba_npixels, rgba_bytes, rgba_q.get(), fifo_img_arg,
+      cfg.video_encoder_nvenc, fps_base, rgba_npixels, rgba_bytes, rgba_q.get(), mq_img_arg,
       slot_assembled_q.get() != nullptr, cfg.resource_grid_slot_stream);
   if (!encoder_stage->ok()) {
     fprintf(stderr, "failed to spawn ffmpeg\n");
-    if (iq_fd_full_grid >= 0) close(iq_fd_full_grid);
-    if (iq_fd_sidecar >= 0) close(iq_fd_sidecar);
+    delete iq_mq_full_grid;
+    iq_mq_full_grid = nullptr;
+    delete iq_mq_sidecar;
+    iq_mq_sidecar = nullptr;
     free_raster_cuda_bufs();
     return 1;
   }
@@ -286,8 +290,8 @@ int plotter_run_launch(const PlotterLaunchConfig& cfg) {
   assembler_stage_th.join();
 
   if (stats_th.joinable()) stats_th.join();
-  if (iq_fd_full_grid >= 0) close(iq_fd_full_grid);
-  if (iq_fd_sidecar >= 0) close(iq_fd_sidecar);
+  delete iq_mq_full_grid;
+  delete iq_mq_sidecar;
 
   encoder_stage.reset();
 

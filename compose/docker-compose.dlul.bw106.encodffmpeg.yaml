@@ -11,7 +11,9 @@
 # GPU: same requirements as compose/docker-compose.yml (NVIDIA Container Toolkit). CPU-only: remove deploy under both backends, set VIDEO_ENCODER=cpu.
 # No container swap: `memswap_limit` must equal `memory` — Docker’s total cap is RAM+swap; equal values ⇒ swap room is 0 (not “8g of swap”).
 #
-# FIFO defaults are direction-specific (under /tmp in container; bind RESGRID_HOST_TMP like the single-backend compose).
+# POSIX mq names are direction-specific in env (e.g. CUDA_IQ_MQ_PATH_DL / _UL); bind RESGRID_HOST_TMP for /tmp file use.
+# `ipc: host` on each backend shares the host IPC namespace so host writers can use the same /resgrid_* mq names.
+# PHY / cuBB in **another Docker container** must also use `ipc: host` (or `ipc: "service:backend-dl"` / `backend-ul`) on that service.
 # File capturer (JPEG): RESGRID_HOST_CAPTURER_SNAPS_{DL,UL} → /encoder-snaps (default ../encoder-snaps-dl, ../encoder-snaps-ul).
 # AUTO_START defaults to 0 for backend-dl and backend-ul; set AUTO_START=1 to start publishers on boot.
 
@@ -20,6 +22,7 @@ include:
 
 services:
   backend-dl:
+    ipc: host
     build:
       context: ..
       dockerfile: backend/Dockerfile
@@ -50,14 +53,11 @@ services:
       CUDA_IQ_PRESET: ${CUDA_IQ_PRESET:-p4}
       CUDA_IQ_PRB: ${CUDA_IQ_PRB:-106}
       CUDA_IQ_SYMBOLS: ${CUDA_IQ_SYMBOLS:-14}
-      CUDA_IQ_USE_FIFO: ${CUDA_IQ_USE_FIFO:-1}
-      CUDA_IQ_FIFO_PATH: ${CUDA_IQ_FIFO_PATH_DL:-/tmp/resource_grid_dl.fifo}
+      CUDA_IQ_MQ_PATH: ${CUDA_IQ_MQ_PATH_DL:-/resgrid_iq_dl}
       CUDA_IQ_GEN_FPS: ${CUDA_IQ_GEN_FPS:-200}
       CUDA_ENCODE_POLICY: ${CUDA_ENCODE_POLICY:-ffmpeg}
-      CUDA_SLOT_USE_FIFO: ${CUDA_SLOT_USE_FIFO:-0}
-      CUDA_SLOT_FIFO_PATH: ${CUDA_SLOT_FIFO_PATH_DL:-/tmp/fapi_dl.fifo}
-      RESGRID_FIFO_CHOWN: ${RESGRID_FIFO_CHOWN:-}
-      RESGRID_FIFO_CHOWN_DISABLE: ${RESGRID_FIFO_CHOWN_DISABLE:-0}
+      CUDA_SLOT_MQ_PATH: ${CUDA_SLOT_MQ_PATH_DL:-/resgrid_slot_dl}
+      RESGRID_MQ_IMAGES: ${RESGRID_MQ_IMAGES_DL:-/resgrid_rgba_dl}
       RESGRID_CAPTURER_DIR: ${RESGRID_CAPTURER_DIR_DL:-/encoder-snaps}
       MTX_PUBLIC_HTTP_BASE: ${MTX_PUBLIC_HTTP_BASE:-http://localhost:8888}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
@@ -104,6 +104,7 @@ services:
           path: ../backend/plotter/include/viridis_lut.inc
 
   backend-ul:
+    ipc: host
     build:
       context: ..
       dockerfile: backend/Dockerfile
@@ -134,14 +135,11 @@ services:
       CUDA_IQ_PRESET: ${CUDA_IQ_PRESET:-p4}
       CUDA_IQ_PRB: ${CUDA_IQ_PRB:-106}
       CUDA_IQ_SYMBOLS: ${CUDA_IQ_SYMBOLS:-14}
-      CUDA_IQ_USE_FIFO: ${CUDA_IQ_USE_FIFO:-1}
-      CUDA_IQ_FIFO_PATH: ${CUDA_IQ_FIFO_PATH_UL:-/tmp/resource_grid_ul.fifo}
+      CUDA_IQ_MQ_PATH: ${CUDA_IQ_MQ_PATH_UL:-/resgrid_iq_ul}
       CUDA_IQ_GEN_FPS: ${CUDA_IQ_GEN_FPS:-200}
       CUDA_ENCODE_POLICY: ${CUDA_ENCODE_POLICY:-ffmpeg}
-      CUDA_SLOT_USE_FIFO: ${CUDA_SLOT_USE_FIFO:-0}
-      CUDA_SLOT_FIFO_PATH: ${CUDA_SLOT_FIFO_PATH_UL:-/tmp/fapi_ul.fifo}
-      RESGRID_FIFO_CHOWN: ${RESGRID_FIFO_CHOWN:-}
-      RESGRID_FIFO_CHOWN_DISABLE: ${RESGRID_FIFO_CHOWN_DISABLE:-0}
+      CUDA_SLOT_MQ_PATH: ${CUDA_SLOT_MQ_PATH_UL:-/resgrid_slot_ul}
+      RESGRID_MQ_IMAGES: ${RESGRID_MQ_IMAGES_UL:-/resgrid_rgba_ul}
       RESGRID_CAPTURER_DIR: ${RESGRID_CAPTURER_DIR_UL:-/encoder-snaps}
       MTX_PUBLIC_HTTP_BASE: ${MTX_PUBLIC_HTTP_BASE:-http://localhost:8888}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}

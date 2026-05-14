@@ -47,19 +47,19 @@ void plotter_warn_queue_drop_oldest(PlotterQueueDropKind kind, const char* queue
             who, queue_name, drops_this_push);
 }
 
-/** Default raw RGBA named pipe (matches ``RESGRID_FIFO_IMAGES`` default in FastAPI ``main.py``). */
-static constexpr const char kDefaultFifoImagesPath[] = "/tmp/images.fifo";
-/** Default full-grid I/Q named pipe (matches ``CUDA_IQ_FIFO_PATH`` default in FastAPI ``main.py``). */
-static constexpr const char kDefaultFifoResourceGridPath[] = "/tmp/resource_grid.fifo";
-/** Default slot / FAPI named pipe (matches ``CUDA_SLOT_FIFO_PATH`` default in FastAPI ``main.py``). */
-static constexpr const char kDefaultFifoFapiPath[] = "/tmp/fapi.fifo";
+/** Default POSIX mq name for raw RGBA (matches ``RESGRID_MQ_IMAGES`` default in FastAPI ``main.py``). */
+static constexpr const char kDefaultMqImagesPath[] = "/resgrid_rgba";
+/** Default full-grid I/Q mq (matches ``CUDA_IQ_MQ_PATH`` default in ``main.py``). */
+static constexpr const char kDefaultMqResourceGridPath[] = "/resgrid_iq";
+/** Default slot / FAPI mq (matches ``CUDA_SLOT_MQ_PATH`` default in ``main.py``). */
+static constexpr const char kDefaultMqFapiPath[] = "/resgrid_slot";
 
 static void usage(const char* av0) {
   fprintf(stderr,
           "Usage: %s [--rtsp URL] [--prb N] [--symbols M] [--cell-pixels P] [--fps F] [--encoder-fps E] [--mag-scale S] "
           "[--preset p4] [--video-encoder nvenc|cpu] [--queue-depth D] [--raster-threads N] [--encode-policy POL] "
           "[--no-square] [--square-letterbox] "
-          "[--fifo-images [PATH]] [--fifo-resource-grid [PATH]] [--fifo-resource-grid-mode full|slot] [--fifo-fapi [PATH]] "
+          "[--mq-images [NAME]] [--mq-resource-grid [NAME]] [--mq-resource-grid-mode full|slot] [--mq-fapi [NAME]] "
           "[--cuda-shm NAME] [--capturer-dir DIR]\n"
           "  --fps F            Pipeline / internal synthetic producer default (Hz); default 200. Also sets --encoder-fps\n"
           "                     if you omit --encoder-fps (backward compatible single-knob).\n"
@@ -71,26 +71,26 @@ static void usage(const char* av0) {
           "                     mean: each tick sends per-pixel color = mean in linear RGB (sRGB EOTF), then OETF;\n"
           "                     alpha = rounded mean of input alphas.\n"
           "                     ffmpeg: write every rendered frame to stdin; FFmpeg fps filter → encoder-fps. When\n"
-          "                     `--fifo-fapi` is used, idle encoder ticks do not inject synthetic black frames.\n"
-          "  Input (combine any compatible FIFOs; no numeric data mode):\n"
-          "    --fifo-images [PATH]  Raw RGBA to the encoder (optional alongside IQ FIFOs: muxed with raster RGBA\n"
-          "                        on FFmpeg stdin under one lock). If PATH omitted, default is %s (backend RESGRID_FIFO_IMAGES).\n"
-          "                        With IQ FIFOs only: full raster + assembler + encoder pipeline; without IQ FIFOs:\n"
+          "                     `--mq-fapi` is used, idle encoder ticks do not inject synthetic black frames.\n"
+          "  Input (POSIX message queues; names start with ``/``; chunked wire — see ``readme.md``; no numeric data mode):\n"
+          "    --mq-images [NAME]  Raw RGBA to the encoder (optional alongside IQ queues: muxed with raster RGBA\n"
+          "                        on FFmpeg stdin under one lock). If NAME omitted, default is %s (backend RESGRID_MQ_IMAGES).\n"
+          "                        With IQ queues only: full raster + assembler + encoder pipeline; without IQ queues:\n"
           "                        FFmpeg-only fast path.\n"
-          "    --fifo-resource-grid [PATH]  With `--fifo-fapi`: raw full-grid I/Q sidecar (one read = one raster).\n"
-          "                        Without `--fifo-fapi`: ``full`` (default) = one raw full-grid raster per read;\n"
+          "    --mq-resource-grid [NAME]  With `--mq-fapi`: raw full-grid I/Q sidecar (one logical frame = one raster).\n"
+          "                        Without `--mq-fapi`: ``full`` (default) = one raw full-grid raster per logical frame;\n"
           "                        ``slot`` = framed slot-IQ stream (header + complex patch per message, see\n"
           "                        ``ResourceGridSlotIqHdr`` in ``plotter_common.cuh``) → same CUDA color path as slots.\n"
-          "                        If PATH omitted, default is %s (same as backend CUDA_IQ_FIFO_PATH).\n"
-          "    --fifo-resource-grid-mode full|slot  Wire format for standalone ``--fifo-resource-grid`` (ignored with\n"
-          "                        ``--fifo-fapi``). Default ``full``.\n"
-          "    --fifo-fapi [PATH]  Slot / FAPI messages → slot assembler → `AssembledSlotQueue` (PHY patches + metadata).\n"
-          "                        If PATH is omitted, default is %s (same as backend CUDA_SLOT_FIFO_PATH).\n"
-          "    (no IQ FIFOs)      Internal synthetic I/Q producer at `--fps`.\n"
+          "                        If NAME omitted, default is %s (same as backend CUDA_IQ_MQ_PATH).\n"
+          "    --mq-resource-grid-mode full|slot  Wire format for standalone ``--mq-resource-grid`` (ignored with\n"
+          "                        ``--mq-fapi``). Default ``full``.\n"
+          "    --mq-fapi [NAME]  Slot / FAPI messages → slot assembler → `AssembledSlotQueue` (PHY patches + metadata).\n"
+          "                        If NAME is omitted, default is %s (same as backend CUDA_SLOT_MQ_PATH).\n"
+          "    (no IQ queues)     Internal synthetic I/Q producer at `--fps`.\n"
           "  --raster-threads N  CUDA raster workers (default 16). N>1: one acquirer preserves slot/sidecar order, N\n"
           "                     GPU workers + merger reorder RGBA for the encoder (cap 64).\n"
           "  --queue-depth D    In-process GridFrame/RgbaFrame queue capacity (default 32); backend env CUDA_IQ_QUEUE_DEPTH.\n",
-          av0, kDefaultFifoImagesPath, kDefaultFifoResourceGridPath, kDefaultFifoFapiPath);
+          av0, kDefaultMqImagesPath, kDefaultMqResourceGridPath, kDefaultMqFapiPath);
 }
 
 int main(int argc, char** argv) {
@@ -108,10 +108,10 @@ int main(int argc, char** argv) {
   int raster_threads = 16;
   bool square_canvas = true;
   bool square_letterbox = false;
-  std::string fifo_images;
-  std::string fifo_resource_grid;
-  std::string fifo_fapi;
-  std::string fifo_resource_grid_mode = "full";
+  std::string mq_images;
+  std::string mq_resource_grid;
+  std::string mq_fapi;
+  std::string mq_resource_grid_mode = "full";
   std::string capturer_dir;
   std::string cuda_shm_name;
   std::string encode_policy_arg = "last";
@@ -144,24 +144,23 @@ int main(int argc, char** argv) {
       square_canvas = false;
     else if (!strcmp(argv[i], "--square-letterbox"))
       square_letterbox = true;
-    else if (!strcmp(argv[i], "--fifo-images")) {
+    else if (!strcmp(argv[i], "--mq-images")) {
       if (i + 1 < argc && argv[i + 1][0] != '-')
-        fifo_images = argv[++i];
+        mq_images = argv[++i];
       else
-        fifo_images = kDefaultFifoImagesPath;
-    } else if (!strcmp(argv[i], "--fifo-resource-grid")) {
+        mq_images = kDefaultMqImagesPath;
+    } else if (!strcmp(argv[i], "--mq-resource-grid")) {
       if (i + 1 < argc && argv[i + 1][0] != '-')
-        fifo_resource_grid = argv[++i];
+        mq_resource_grid = argv[++i];
       else
-        fifo_resource_grid = kDefaultFifoResourceGridPath;
-    }
-    else if (!strcmp(argv[i], "--fifo-resource-grid-mode") && i + 1 < argc)
-      fifo_resource_grid_mode = argv[++i];
-    else if (!strcmp(argv[i], "--fifo-fapi")) {
+        mq_resource_grid = kDefaultMqResourceGridPath;
+    } else if (!strcmp(argv[i], "--mq-resource-grid-mode") && i + 1 < argc)
+      mq_resource_grid_mode = argv[++i];
+    else if (!strcmp(argv[i], "--mq-fapi")) {
       if (i + 1 < argc && argv[i + 1][0] != '-')
-        fifo_fapi = argv[++i];
+        mq_fapi = argv[++i];
       else
-        fifo_fapi = kDefaultFifoFapiPath;
+        mq_fapi = kDefaultMqFapiPath;
     }
     else if (!strcmp(argv[i], "--cuda-shm") && i + 1 < argc)
       cuda_shm_name = argv[++i];
@@ -208,22 +207,22 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  const bool have_fapi = !fifo_fapi.empty();
-  const bool have_res = !fifo_resource_grid.empty();
-  if (!str_ieq(fifo_resource_grid_mode.c_str(), "full") && !str_ieq(fifo_resource_grid_mode.c_str(), "slot")) {
-    fprintf(stderr, "%s: --fifo-resource-grid-mode must be full or slot (got %s)\n", argv[0],
-            fifo_resource_grid_mode.c_str());
+  const bool have_fapi = !mq_fapi.empty();
+  const bool have_res = !mq_resource_grid.empty();
+  if (!str_ieq(mq_resource_grid_mode.c_str(), "full") && !str_ieq(mq_resource_grid_mode.c_str(), "slot")) {
+    fprintf(stderr, "%s: --mq-resource-grid-mode must be full or slot (got %s)\n", argv[0],
+            mq_resource_grid_mode.c_str());
     return 1;
   }
-  if (have_fapi && str_ieq(fifo_resource_grid_mode.c_str(), "slot")) {
+  if (have_fapi && str_ieq(mq_resource_grid_mode.c_str(), "slot")) {
     fprintf(stderr,
-            "%s: --fifo-resource-grid-mode slot applies only without --fifo-fapi (FAPI sidecar expects raw full-grid "
+            "%s: --mq-resource-grid-mode slot applies only without --mq-fapi (FAPI sidecar expects raw full-grid "
             "writes)\n",
             argv[0]);
     return 1;
   }
   const bool resource_grid_slot_stream =
-      have_res && !have_fapi && str_ieq(fifo_resource_grid_mode.c_str(), "slot");
+      have_res && !have_fapi && str_ieq(mq_resource_grid_mode.c_str(), "slot");
 
   int frame_w;
   int frame_h;
@@ -287,14 +286,14 @@ int main(int argc, char** argv) {
 
   PlotterLaunchConfig lc{};
   lc.prog = argv[0];
-  /* RGBA-only fast path only when there are no IQ inputs; otherwise **fifo_images** feeds the encoder in parallel
+  /* RGBA-only fast path only when there are no IQ inputs; otherwise **mq_images** feeds the encoder in parallel
    * with the raster queue (see **EncoderStage** dual-input threads in **plotter_encoder.cu**). */
-  lc.fifo_images_only = !fifo_images.empty() && fifo_resource_grid.empty() && fifo_fapi.empty();
+  lc.mq_images_only = !mq_images.empty() && mq_resource_grid.empty() && mq_fapi.empty();
   lc.rtsp = std::move(rtsp);
   lc.cuda_shm_name = std::move(cuda_shm_name);
-  lc.fifo_images = std::move(fifo_images);
-  lc.fifo_resource_grid = std::move(fifo_resource_grid);
-  lc.fifo_fapi = std::move(fifo_fapi);
+  lc.mq_images = std::move(mq_images);
+  lc.mq_resource_grid = std::move(mq_resource_grid);
+  lc.mq_fapi = std::move(mq_fapi);
   lc.capturer_dir = std::move(capturer_dir);
   lc.preset = preset;
   lc.prb = prb;

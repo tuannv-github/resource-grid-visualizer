@@ -10,6 +10,7 @@ add_executable(
   resgrid_plotter
   src/plotter_management.cu
   src/plotter_pipeline.cu
+  src/plotter_posix_mq.cpp
   src/plotter_assembler.cu
   src/plotter_raster.cu
   src/plotter_encoder.cu

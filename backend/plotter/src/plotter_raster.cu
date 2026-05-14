@@ -3,15 +3,16 @@
  */
 #include "plotter_common.cuh"
 #include "plotter_raster.cuh"
+#include "plotter_posix_mq.cuh"
 #include "viridis_lut.inc"
 #include "font8x8_basic.inc"
 
 #include <thread>
 #include <vector>
 
-/** Implemented in `plotter_assembler.cu`; used here for standalone ``--fifo-resource-grid`` (raster-owned FIFO thread). */
-void external_grid_frame_reader_main(int fd, int ncells, GridFrameQueue* outq, const char* producer_stage);
-void resource_grid_slot_iq_fifo_reader_main(int fd, int prb_dim, int sym_dim, int ncells, GridFrameQueue* outq);
+/** Implemented in `plotter_assembler.cu`; used here for standalone ``--mq-resource-grid`` (raster-owned MQ thread). */
+void external_grid_frame_reader_main(ResgridMqStreamIn* mq, int ncells, GridFrameQueue* outq, const char* producer_stage);
+void resource_grid_slot_iq_fifo_reader_main(ResgridMqStreamIn* mq, int prb_dim, int sym_dim, int ncells, GridFrameQueue* outq);
 
 __device__ float3 viridis_rgb(float t) {
   t = fminf(fmaxf(t, 0.f), 1.f);
@@ -625,9 +626,9 @@ void RasterStage::raster_configure_pool(RasterWorkQueue* work_q) {
   }
 }
 
-void RasterStage::raster_attach_full_grid_fifo_reader(int iq_fd, bool resource_grid_slot_iq_stream) {
-  full_grid_fifo_reader_fd_ = iq_fd;
-  full_grid_fifo_reader_slot_stream_ = resource_grid_slot_iq_stream;
+void RasterStage::raster_attach_full_grid_mq_reader(ResgridMqStreamIn* iq_mq, bool resource_grid_slot_iq_stream) {
+  full_grid_mq_reader_ = iq_mq;
+  full_grid_mq_reader_slot_stream_ = resource_grid_slot_iq_stream;
 }
 
 void RasterStage::single_thread_main() {
@@ -795,19 +796,19 @@ void RasterStage::merger_main() {
 
 void RasterStage::raster_run() {
   fprintf(stderr, "resgrid_plotter: Raster stage thread started\n");
-  std::thread full_grid_fifo_reader;
-  const bool run_full_grid_fifo_reader =
-      full_grid_fifo_reader_fd_ >= 0 && acq_full_grid_q_ != nullptr;
-  if (run_full_grid_fifo_reader) {
-    const int fd = full_grid_fifo_reader_fd_;
+  std::thread full_grid_mq_reader;
+  const bool run_full_grid_mq_reader =
+      full_grid_mq_reader_ != nullptr && full_grid_mq_reader_->ok() && acq_full_grid_q_ != nullptr;
+  if (run_full_grid_mq_reader) {
+    ResgridMqStreamIn* const mq = full_grid_mq_reader_;
     FullGridFifoQueue* const fq = acq_full_grid_q_;
-    const bool slot = full_grid_fifo_reader_slot_stream_;
+    const bool slot = full_grid_mq_reader_slot_stream_;
     const int prb_dim = acq_prb_, sym_dim = acq_sym_, ncells = acq_ncells_;
-    full_grid_fifo_reader = std::thread([fd, fq, slot, prb_dim, sym_dim, ncells]() {
+    full_grid_mq_reader = std::thread([mq, fq, slot, prb_dim, sym_dim, ncells]() {
       if (slot)
-        resource_grid_slot_iq_fifo_reader_main(fd, prb_dim, sym_dim, ncells, fq);
+        resource_grid_slot_iq_fifo_reader_main(mq, prb_dim, sym_dim, ncells, fq);
       else
-        external_grid_frame_reader_main(fd, ncells, fq, "Raster (IQ FIFO full-grid)");
+        external_grid_frame_reader_main(mq, ncells, fq, "Raster (IQ MQ full-grid)");
     });
   }
 
@@ -825,6 +826,6 @@ void RasterStage::raster_run() {
     merger.join();
   }
 
-  if (full_grid_fifo_reader.joinable()) full_grid_fifo_reader.join();
+  if (full_grid_mq_reader.joinable()) full_grid_mq_reader.join();
   fprintf(stderr, "resgrid_plotter: Raster stage thread exiting\n");
 }

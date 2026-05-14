@@ -8,7 +8,7 @@ This document is for **integrators** who want to drive **`resgrid_plotter`** wit
 
 | Term | Meaning |
 |------|---------|
-| **Generation mode** | **`SYNTHETIC_RESOURCE_GRID`** — **full-grid** path: built-in **`--data-mode 1`** by default, or **`--data-mode 2`** + **`--fifo-resource-grid`** when **`CUDA_IQ_USE_FIFO=1`** (each FIFO message = one **complete** grid). **`SYNTHETIC_FAPI`** (historic **`SYNTHETIC_CHANNEL_BASED`**) — **slot messages** / channel-based (`--data-mode 3`): each slot FIFO message is a **slot allocation** (a **part** of the grid for one slot) plus PHY metadata; plotter **assembles** full grids. Channel-based mode always opens **slot FIFO** (`--fifo-fapi`). PHY channel ids **`1…8`** come only from slot messages (OAI **`resgrid_plotter_slot_fifo`** emits **7**/**8** when CSI-RS/SRS PDUs are present). Built-in synthetic I/Q never paints `chan`. Configure with **`GENERATION_MODE`** in compose (default **`synthetic_channel_based`** → **`SYNTHETIC_FAPI`**). Legacy **`CHANNEL_BASED_SYNTHETIC_GENERATION`** aliases channel-based mode. |
+| **Generation mode** | **`SYNTHETIC_RESOURCE_GRID`** — **full-grid** path: built-in **`--data-mode 1`** by default, or **`--data-mode 2`** + **`--mq-resource-grid`** (each logical mq frame = one **complete** grid). **`SYNTHETIC_FAPI`** (historic **`SYNTHETIC_CHANNEL_BASED`**) — **slot messages** / channel-based (`--data-mode 3`): each slot mq message is a **slot allocation** (a **part** of the grid for one slot) plus PHY metadata; plotter **assembles** full grids. Channel-based mode always opens the **slot mq** (`--mq-fapi`). PHY channel ids **`1…8`** come only from slot messages (OAI **`resgrid_plotter_slot_fifo`** naming is historic; transport is mq). Built-in synthetic I/Q never paints `chan`. Configure with **`GENERATION_MODE`** in compose (default **`synthetic_channel_based`** → **`SYNTHETIC_FAPI`**). Legacy **`CHANNEL_BASED_SYNTHETIC_GENERATION`** aliases channel-based mode. |
 | **Logical channel id** | Per-cell byte **`0…255`** in the plotter’s `chan` plane. **`0`** = no channel tint → **Viridis** colormap from magnitude only. **`1…8`** = fixed **PHY-style** RGB tints (see §4). **`9…255`** fall through to **neutral gray** in CUDA until explicitly mapped. |
 | **`slot_id`** | Unsigned integer grouping **multiple FIFO messages** into one **full-grid** frame. When `slot_id` **increases**, the previous slot is considered **complete** and is queued for encode (see §6). |
 
@@ -23,23 +23,27 @@ This matches the Vite IQ axes (`iq_symbols`, `iq_prb` from `/api/plotter/status`
 
 ---
 
-## 2. FIFO paths vs in-process frame queues
+## 2. POSIX mq names vs in-process frame queues
 
-Integrators sometimes confuse **named pipes on disk** with the plotter’s **in-memory** queues.
+Integrators sometimes confuse **kernel POSIX message queue names** (strings starting with **`/`**) with the plotter’s **in-memory** queues.
 
-**Named FIFOs (real paths; backend `mkfifo` on Start):**
+**POSIX mqueues (this repo; backend creates queues before plotter spawn):**
 
-| Pipe | Environment variable | Default path |
-|------|---------------------|--------------|
-| Full-grid I/Q | **`CUDA_IQ_FIFO_PATH`** | **`/tmp/resource_grid.fifo`** |
-| Slot allocation messages | **`CUDA_SLOT_FIFO_PATH`** | **`/tmp/fapi.fifo`** |
-| Raw RGBA video (`--fifo-images`) | **`RESGRID_FIFO_IMAGES`** | **`/tmp/images.fifo`** (when unset in env; empty string disables) |
+| Stream | Environment variable | Default name |
+|--------|---------------------|--------------|
+| Full-grid I/Q | **`CUDA_IQ_MQ_PATH`** | **`/resgrid_iq`** |
+| Slot allocation messages | **`CUDA_SLOT_MQ_PATH`** | **`/resgrid_slot`** |
+| Raw RGBA video (`--mq-images`) | **`RESGRID_MQ_IMAGES`** | **`/resgrid_rgba`** |
 
-These are passed to **`resgrid_plotter`** as **`--fifo-resource-grid`**, **`--fifo-fapi`**, and **`--fifo-images`** respectively.
+These are passed to **`resgrid_plotter`** as **`--mq-resource-grid`**, **`--mq-fapi`**, and **`--mq-images`** respectively. **`generator.py`** uses the same **`--mq-*`** flags.
 
-**Ownership after `mkfifo`:** When the backend creates a pipe on a **host-mounted** directory (e.g. **`resouce-grid/host-tmp` → `/tmp`** in Compose), it runs **`chown`** so non-root peers can open it. **`RESGRID_FIFO_CHOWN`** defaults to **`1000:1000`** (`uid:gid`). Set **`RESGRID_FIFO_CHOWN_DISABLE=1`** to skip. If pipes were created outside the backend, run **`scripts/chown_resgrid_fifos.sh`** on that directory.
+**Deployment note:** Message queues live in the **kernel mqueue namespace** for the container (or host); bind-mounting **`/tmp`** does **not** by itself define mq visibility across hosts.
 
-When running **two** backends (DL + UL, **`compose/docker-compose.dlul.yaml`**), use **distinct** FIFO paths per container (defaults such as **`/tmp/resource_grid_dl.fifo`**, **`/tmp/fapi_ul.fifo`**, etc., or the **`CUDA_*_PATH_DL` / `_UL`** variables in that compose file) so external tools can target one direction without colliding on the same pipe names.
+**Docker `ipc: host` (compose `backend` services):** This repo sets **`ipc: host`** on **`backend`** so **host processes** (e.g. cuPHY/cuBB running **on the Linux host**, not in Docker) share the same POSIX mq namespace as **`resgrid_plotter`**. If your PHY / cuBB runs **inside another Docker container**, that container **still does not** share IPC with the host unless you give it **`ipc: host`** as well (or **`ipc: "service:<backend>"`** so it joins the backend’s IPC namespace). Otherwise **`mq_open("/resgrid_iq", O_WRONLY)`** in the PHY container attaches to a **different** queue than the plotter’s reader.
+
+**Do not run two stacks** with the same default **`/resgrid_*`** names on one host while both use **`ipc: host`**: **`mq_create_queue`** calls **`mq_unlink`** and can tear down the other stack’s queues. Use distinct **`CUDA_IQ_MQ_PATH`** (and slot/RGBA names) per deployment.
+
+When running **two** backends (DL + UL, **`compose/docker-compose.dlul.yaml`**), use **distinct** mq names per container (e.g. **`CUDA_IQ_MQ_PATH_DL` / `_UL`** in compose) so external tools can target one direction without colliding on the same queue names.
 
 ### Dual DL / UL (`compose/docker-compose.dlul*.yaml`)
 
@@ -55,11 +59,13 @@ Two **FastAPI** + **`resgrid_plotter`** publishers run in parallel and share one
 - **MediaMTX config:** **`mediamtx/mediamtx.dlul.yml`** (not the single-path **`mediamtx.yml`**). Each backend’s **`MTX_RTSP_URL`** targets **`…/live_dl`** or **`…/live_ul`** as in **`compose/docker-compose.dlul.yaml`**.
 - **Vite / same-origin proxy:** DL/UL compose sets **`VITE_API_RELATIVE=0`** and does **not** use **`VITE_DEV_PROXY_TARGET`** — the UI issues **`fetch()`** and **OpenAPI /docs** links against the two **absolute** API bases. Clients must be able to reach **both** API ports (and **5173**, **8888**, etc.) from the browser, unless you put a gateway in front and set **`VITE_API_BASE_DL`** / **`VITE_API_BASE_UL`** to those URLs.
 - **OpenAPI / Swagger:** Each column’s **OpenAPI /docs** link uses that column’s **`VITE_API_BASE_*`** (DL → **8081**, UL → **8082**). If those env values use **`localhost`** / **`127.0.0.1`** but you open the UI at a LAN IP, the frontend rewrites the host to **`window.location.hostname`** (**`frontend/src/config/panelLayout.ts`**).
-- **FIFO paths:** Defaults are **direction-specific** in compose (**`CUDA_IQ_FIFO_PATH_DL` / `_UL`**, **`CUDA_SLOT_FIFO_PATH_DL` / `_UL`** → **`CUDA_IQ_FIFO_PATH`** / **`CUDA_SLOT_FIFO_PATH`** inside each container); keep DL and UL pipes on the same host bind-mount if a host process must choose which pipe to open.
+- **POSIX mq names:** Defaults are **direction-specific** in compose (**`CUDA_IQ_MQ_PATH_DL` / `_UL`**, **`CUDA_SLOT_MQ_PATH_DL` / `_UL`**, **`RESGRID_MQ_IMAGES_DL` / `_UL`** → per-service **`CUDA_IQ_MQ_PATH`** / **`CUDA_SLOT_MQ_PATH`** / **`RESGRID_MQ_IMAGES`** inside each container).
 
 Compose files: **`compose/docker-compose.dlul.yaml`** (default **273** PRB per backend), **`compose/docker-compose.dlul.bw106.yaml`** (**106**), **`compose/docker-compose.dlul.bw273.yaml`** (**273** naming variant).
 
-**OAI gNB writer:** If **`resgrid_plotter`** or the backend **restarts**, the FIFO read end closes and the gNB may see **`EPIPE` / Broken pipe** on `write`. Current OAI MAC code **closes the writer fd** on write failure and **re-opens** on the next slot so connectivity recovers when the reader is back (see **`openairinterface5g/.../resgrid_plotter_slot_fifo.c`**).
+**OAI gNB writer:** If **`resgrid_plotter`** or the backend **restarts**, the mq reader side may close and the gNB may see **`EPIPE` / Broken pipe** or **`mq_send`** errors on write. Current OAI MAC code **closes the writer fd** on write failure and **re-opens** on the next slot so connectivity recovers when the reader is back (see **`openairinterface5g/.../resgrid_plotter_slot_fifo.c`** — filename historic).
+
+**cuPHY PUSCH (optional):** When **`CUPHY_RESGRID_MQ_ENABLE`** (or legacy **`CUPHY_RESGRID_FIFO_ENABLE`**) is set, cuPHY can push **PUSCH `DataRx`** IQ over **POSIX mq** when **`CUDA_IQ_MQ_PATH`** or **`CUPHY_RESGRID_MQ_PATH`** is set (Linux only; see **[`CUPHY_UL_RESGRID_FIFO.md`](CUPHY_UL_RESGRID_FIFO.md)**). Named-pipe / FIFO export was removed from cuPHY. Match **`CUPHY_RESGRID_PRB` / `CUPHY_RESGRID_SYMBOLS`** to **`CUDA_IQ_PRB` / `CUDA_IQ_SYMBOLS`**.
 
 **In-process queues — not files:** **`CUDA_IQ_QUEUE_DEPTH`** (default **`32`**) maps to **`--queue-depth`** and caps how many complete **`GridFrame`** / **RGBA** items can wait inside the binary. There is **no** “queue file name” for this knob. When a bounded queue is full, **`push` drops the oldest** item and enqueues the new one (counters such as **`g_grid_frame_queue_drops`**, **`g_rgba_frame_queue_drops`**, **`g_slot_completed_drops`**, … in **`plotter_common.cuh`** / **`plotter_management.cu`**). The optional **file capturer** queue uses the same **drop-oldest** policy. See **[`PLOTTER_PIPELINE.md`](PLOTTER_PIPELINE.md)** §6.
 

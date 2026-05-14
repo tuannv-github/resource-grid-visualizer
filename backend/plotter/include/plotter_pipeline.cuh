@@ -7,13 +7,13 @@
 
 struct PlotterLaunchConfig {
   const char* prog = "resgrid_plotter";
-  /** True only for **--fifo-images** without IQ FIFOs (encoder-only fast path). */
-  bool fifo_images_only = false;
+  /** True only for **--mq-images** without IQ message queues (encoder-only fast path). */
+  bool mq_images_only = false;
   std::string rtsp;
   std::string cuda_shm_name;
-  std::string fifo_images;
-  std::string fifo_resource_grid;
-  std::string fifo_fapi;
+  std::string mq_images;
+  std::string mq_resource_grid;
+  std::string mq_fapi;
   std::string capturer_dir;
   std::string preset = "p4";
   int prb = 273;
@@ -40,5 +40,5 @@ struct PlotterLaunchConfig {
   float cs_y = 0.f;
 };
 
-/** RGBA-only, full IQ pipeline, or IQ + optional **--fifo-images** (implementation in `plotter_pipeline.cu`). */
+/** RGBA-only, full IQ pipeline, or IQ + optional **--mq-images** (implementation in `plotter_pipeline.cu`). */
 int plotter_run_launch(const PlotterLaunchConfig& cfg);

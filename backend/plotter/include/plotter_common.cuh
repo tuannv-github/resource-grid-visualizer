@@ -212,11 +212,11 @@ class SlotCompletedQueue {
 
 /** Pipeline 1: internal synthetic producer → this queue → interpolate (CUDA) → NVENC. */
 using InternalFrameQueue = GridFrameQueue;
-/** Pipeline 2 (full-grid FIFO): one `--fifo-resource-grid` read = one complete resource-grid I/Q raster. */
+/** Pipeline 2 (full-grid mq): one `--mq-resource-grid` logical frame = one complete resource-grid I/Q raster. */
 using FullGridFifoQueue = GridFrameQueue;
 /** Pipeline 3: slot-message assembler pushes one fully assembled grid (from slot allocations) here. */
 using AssembledSlotQueue = SlotCompletedQueue;
-/** Pipeline 3 optional: `--fifo-resource-grid` full-grid sidecar while FAPI messages supply channel metadata / patches. */
+/** Pipeline 3 optional: `--mq-resource-grid` full-grid sidecar while FAPI messages supply channel metadata / patches. */
 using ChannelModeIqSidecarQueue = GridFrameQueue;
 
 /** Raster → Encode: completed RGBA frames (host memory), same backpressure pattern as `GridFrameQueue`. */
@@ -289,7 +289,7 @@ struct EncoderStageCtx {
   /** Write end of pipe to FFmpeg stdin (raw `write(2)` only — do not mix with stdio on this fd). */
   int ff_pipe_fd = -1;
   EncodePolicy enc_pol = EncodePolicy::Last;
-  /** True when `--fifo-fapi` is active: encoder does not inject filler RGBA on idle raster ticks. */
+  /** True when `--mq-fapi` is active: encoder does not inject filler RGBA on idle raster ticks. */
   bool fapi_slot_path = false;
   /** True when standalone resource-grid FIFO uses slot-IQ framing (sparse cadence like FAPI). */
   bool resource_grid_slot_iq_stream = false;
@@ -344,7 +344,7 @@ struct SlotRegionDesc {
 
 static_assert(sizeof(SlotRegionDesc) == 16, "SlotRegionDesc size");
 
-/** Standalone ``--fifo-resource-grid`` slot-IQ stream (little-endian, packed). One message = one rectangular
+/** Standalone ``--mq-resource-grid`` slot-IQ stream (little-endian, packed). One message = one rectangular
  *  patch of complex samples for a ``slot_id``; multiple messages may accumulate before ``slot_id`` advances.
  *  Python: ``struct.pack("<IIHHHHI", magic, slot_id, sym_start, sym_count, prb_start, prb_count, n_complex)``. */
 #pragma pack(push, 1)

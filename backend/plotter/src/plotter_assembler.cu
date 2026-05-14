@@ -1,16 +1,17 @@
 /*
- * Assembler stage: slot FIFO → `AssembledSlotQueue`; IQ FIFO readers; internal synthetic producer.
+ * Assembler stage: slot / FAPI POSIX mq → `AssembledSlotQueue`; IQ mq readers; internal synthetic producer.
  */
 #include "plotter_common.cuh"
 #include "plotter_assembler.cuh"
 
+#include <cstdio>
 #include <errno.h>
-#include <fcntl.h>
 #include <memory>
-#include <poll.h>
 #include <thread>
 #include <vector>
-#include <unistd.h>
+
+#include "plotter_posix_mq.cuh"
+
 static constexpr uint32_t kSlotFifoMagic = 0x31564153u;
 static constexpr uint16_t kSlotProtoVersion1 = 1u;
 static constexpr uint16_t kSlotProtoVersion2 = 2u;
@@ -29,20 +30,8 @@ static SlotRegionDesc slot_region_from_hdr(const SlotMsgHdr& h) {
   r.reserved[0] = r.reserved[1] = r.reserved[2] = 0;
   return r;
 }
-static bool read_exact_from(int fd, void* buf, size_t n, const char* ctx) {
-  auto* p = reinterpret_cast<uint8_t*>(buf);
-  size_t got = 0;
-  while (got < n && g_run.load()) {
-    ssize_t r = read(fd, p + got, n - got);
-    if (r < 0) {
-      fprintf(stderr, "resgrid_plotter read %s: ", ctx);
-      perror(nullptr);
-      return false;
-    }
-    if (r == 0) return false;
-    got += static_cast<size_t>(r);
-  }
-  return got == n && g_run.load();
+static bool read_exact_from_mq(ResgridMqStreamIn& mq, void* buf, size_t n, const char* ctx) {
+  return mq.read_exact(buf, n, ctx);
 }
 
 static void scatter_slot_payload_patch(std::vector<float2>& grid, int prb_dim, int sym_dim, const SlotRegionDesc& r,
@@ -139,21 +128,15 @@ static SlotRegionDesc region_from_resource_grid_slot_hdr(const ResourceGridSlotI
 
 static void slot_message_assembler_main(const std::string& path, int prb_dim, int sym_dim, int ncells,
                                         AssembledSlotQueue* outq) {
-  /* One FIFO session: open read end, consume until writer closes (EOF) or error, then close and open again.
-     Without this loop, stopping generator.py closes the writer; our reader hits EOF, closes fd,
-     and exits — the next writer blocks forever on O_WRONLY with no reader (see generator log:
-     "opening slot fifo ... blocks until resgrid_plotter opens read side"). */
+  /* Re-open read side after errors so a later writer (e.g. restarted generator) can attach again. */
   while (g_run.load()) {
-    fprintf(stderr, "resgrid_plotter: waiting for slot FIFO writer on %s\n", path.c_str());
-    const int fd = open(path.c_str(), O_RDONLY);
-    if (fd < 0) {
-      perror("resgrid_plotter open --fifo-fapi");
+    fprintf(stderr, "resgrid_plotter: waiting for FAPI / slot MQ writer on %s\n", path.c_str());
+    ResgridMqStreamIn mq;
+    if (!mq.open_read(path.c_str())) {
+      perror("resgrid_plotter open --mq-fapi");
       g_run = false;
       return;
     }
-#if defined(__linux__)
-    (void)fcntl(fd, F_SETPIPE_SZ, 1 << 20);
-#endif
     uint32_t active_slot = 0xffffffffu;
     std::vector<float2> grid((size_t)ncells, make_float2(0.f, 0.f));
     std::vector<uint8_t> chan_plane((size_t)ncells, 0);
@@ -162,22 +145,8 @@ static void slot_message_assembler_main(const std::string& path, int prb_dim, in
     uint64_t slot_id_forward_gap = 0;
 
     while (g_run.load()) {
-      for (;;) {
-        if (!g_run.load()) goto slot_fifo_session_done;
-        struct pollfd pfd = {fd, POLLIN, 0};
-        const int pr = poll(&pfd, 1, 500);
-        if (pr < 0) {
-          if (errno == EINTR) continue;
-          perror("resgrid_plotter poll slot-fifo");
-          g_run = false;
-          goto slot_fifo_session_done;
-        }
-        if (pr == 0) continue;
-        break;
-      }
-
       SlotMsgHdr h{};
-      if (!read_exact_from(fd, &h, sizeof h, "slot-fifo hdr")) goto slot_fifo_session_done;
+      if (!read_exact_from_mq(mq, &h, sizeof h, "slot-mq hdr")) goto slot_fifo_session_done;
       if (h.magic != kSlotFifoMagic) continue;
       if (h.version != kSlotProtoVersion1 && h.version != kSlotProtoVersion2) continue;
 
@@ -186,7 +155,7 @@ static void slot_message_assembler_main(const std::string& path, int prb_dim, in
 
       if (h.version == kSlotProtoVersion2 && (h.flags & kSlotFlagMultiRegion)) {
         uint16_t n_reg = 0;
-        if (!read_exact_from(fd, &n_reg, sizeof n_reg, "slot-fifo n_regions")) goto slot_fifo_session_done;
+        if (!read_exact_from_mq(mq, &n_reg, sizeof n_reg, "slot-fifo n_regions")) goto slot_fifo_session_done;
         const size_t rbytes = (size_t)n_reg * sizeof(SlotRegionDesc);
         constexpr size_t kMaxRegionBlob = 1u << 20;
         if (n_reg == 0 || rbytes > kMaxRegionBlob) {
@@ -197,11 +166,11 @@ static void slot_message_assembler_main(const std::string& path, int prb_dim, in
           fprintf(stderr, "resgrid_plotter: slot FIFO n_regions=%u > %u (discard descriptors)\n", (unsigned)n_reg,
                   (unsigned)kSlotMaxRegions);
           std::vector<uint8_t> toss(rbytes);
-          if (!read_exact_from(fd, toss.data(), rbytes, "slot-fifo regions (discard)")) goto slot_fifo_session_done;
+          if (!read_exact_from_mq(mq, toss.data(), rbytes, "slot-fifo regions (discard)")) goto slot_fifo_session_done;
           layout_ok = false;
         } else {
           regions.resize(n_reg);
-          if (!read_exact_from(fd, regions.data(), rbytes, "slot-fifo regions")) goto slot_fifo_session_done;
+          if (!read_exact_from_mq(mq, regions.data(), rbytes, "slot-fifo regions")) goto slot_fifo_session_done;
           uint64_t sum = 0;
           for (const auto& r : regions) {
             sum += (uint64_t)r.sym_count * (uint64_t)r.prb_count;
@@ -226,7 +195,7 @@ static void slot_message_assembler_main(const std::string& path, int prb_dim, in
       if (h.n_complex > 0) {
         payload.resize((size_t)h.n_complex);
         const size_t nbytes = (size_t)h.n_complex * sizeof(float2);
-        if (!read_exact_from(fd, payload.data(), nbytes, "slot-fifo payload")) goto slot_fifo_session_done;
+        if (!read_exact_from_mq(mq, payload.data(), nbytes, "slot-fifo payload")) goto slot_fifo_session_done;
       }
 
       if (!layout_ok) continue;
@@ -274,17 +243,18 @@ static void slot_message_assembler_main(const std::string& path, int prb_dim, in
   slot_fifo_session_done:
     if (active_slot != 0xffffffffu)
       slot_fifo_finalize(grid, chan_plane, rnti_plane, ncells, outq);
-    close(fd);
+    mq.close();
     if (!g_run.load()) return;
     fprintf(stderr,
-            "resgrid_plotter: slot FIFO writer disconnected or read ended; will reopen read side when the next "
-            "writer opens %s\n",
+            "resgrid_plotter: slot MQ read session ended; will reopen when the next writer opens %s\n",
             path.c_str());
   }
 }
 
-void resource_grid_slot_iq_fifo_reader_main(int fd, int prb_dim, int sym_dim, int ncells, GridFrameQueue* outq) {
+void resource_grid_slot_iq_fifo_reader_main(ResgridMqStreamIn* mq_in, int prb_dim, int sym_dim, int ncells,
+                                            GridFrameQueue* outq) {
   fprintf(stderr, "resgrid_plotter: resource-grid slot-IQ stream → frame queue (cells=%d)\n", ncells);
+  ResgridMqStreamIn& mq = *mq_in;
   uint32_t active_slot = 0xffffffffu;
   std::vector<float2> grid((size_t)ncells, make_float2(0.f, 0.f));
   std::vector<uint8_t> chan_plane((size_t)ncells, 0);
@@ -293,22 +263,8 @@ void resource_grid_slot_iq_fifo_reader_main(int fd, int prb_dim, int sym_dim, in
   uint64_t slot_id_forward_gap = 0;
 
   while (g_run.load()) {
-    for (;;) {
-      if (!g_run.load()) goto rg_slot_reader_done;
-      struct pollfd pfd = {fd, POLLIN, 0};
-      const int pr = poll(&pfd, 1, 500);
-      if (pr < 0) {
-        if (errno == EINTR) continue;
-        perror("resgrid_plotter poll resource-grid-slot-iq");
-        g_run = false;
-        goto rg_slot_reader_done;
-      }
-      if (pr == 0) continue;
-      break;
-    }
-
     ResourceGridSlotIqHdr h{};
-    if (!read_exact_from(fd, &h, sizeof h, "resource-grid-slot-iq hdr")) goto rg_slot_reader_done;
+    if (!read_exact_from_mq(mq, &h, sizeof h, "resource-grid-slot-iq hdr")) goto rg_slot_reader_done;
     if (h.magic != kResourceGridSlotIqMagic) continue;
 
     bool layout_ok = true;
@@ -322,7 +278,7 @@ void resource_grid_slot_iq_fifo_reader_main(int fd, int prb_dim, int sym_dim, in
     if (h.n_complex > 0) {
       payload.resize((size_t)h.n_complex);
       const size_t nbytes = (size_t)h.n_complex * sizeof(float2);
-      if (!read_exact_from(fd, payload.data(), nbytes, "resource-grid-slot-iq payload")) goto rg_slot_reader_done;
+      if (!read_exact_from_mq(mq, payload.data(), nbytes, "resource-grid-slot-iq payload")) goto rg_slot_reader_done;
     }
 
     if (!layout_ok) continue;
@@ -370,56 +326,50 @@ void resource_grid_slot_iq_fifo_reader_main(int fd, int prb_dim, int sym_dim, in
 rg_slot_reader_done:
   if (active_slot != 0xffffffffu)
     slot_fifo_finalize_to_q(grid, chan_plane, rnti_plane, ncells, outq, "Raster (resource-grid slot IQ)");
-  fprintf(stderr, "resgrid_plotter: resource-grid slot-IQ reader exiting (raster FIFO thread)\n");
+  fprintf(stderr, "resgrid_plotter: resource-grid slot-IQ reader exiting (raster MQ thread)\n");
 }
 
-bool read_exact(int fd, void* buf, size_t n) {
-  auto* p = reinterpret_cast<uint8_t*>(buf);
-  size_t got = 0;
-  while (got < n && g_run.load()) {
-    ssize_t r = read(fd, p + got, n - got);
-    if (r < 0) {
-      perror("read iq-fifo");
-      return false;
-    }
-    if (r == 0) return false;
-    got += static_cast<size_t>(r);
-  }
-  return got == n && g_run.load();
-}
-
-/** Open IQ named pipe for read; enlarge buffer on Linux. Returns -1 on failure (perror already). */
-int AssemblerStage::assembler_open_iq_fifo_read_end(const char* path, const char* wait_label) {
-  fprintf(stderr, "resgrid_plotter: waiting for IQ writer on %s (%s)\n", path, wait_label);
-  const int fd = open(path, O_RDONLY);
-  if (fd < 0) {
-    perror("open --fifo-resource-grid");
-    return -1;
-  }
-#if defined(__linux__)
-  (void)fcntl(fd, F_SETPIPE_SZ, 1 << 20);
-#endif
-  return fd;
-}
-
-/** Prepare `gf` as zero-chan IQ grid and read one full float32 I/Q raster from `fd`. */
-bool read_one_external_iq_frame(int fd, int ncells, GridFrame& gf) {
+bool read_one_external_iq_frame(ResgridMqStreamIn* mq, int ncells, GridFrame& gf) {
   gf.iq.resize((size_t)ncells);
   gf.chan.assign((size_t)ncells, 0);
   gf.cell_rnti.clear();
-  return read_exact(fd, gf.iq.data(), (size_t)ncells * sizeof(float2));
+  if (!mq->read_exact(gf.iq.data(), (size_t)ncells * sizeof(float2), "iq-mq full-grid payload")) return false;
+  const uint16_t hp = mq->last_frame_prb();
+  const uint16_t hs = mq->last_frame_symbols();
+  if (hp > 0u && hs > 0u) {
+    const uint64_t cells_hdr = (uint64_t)hp * (uint64_t)hs;
+    if (cells_hdr != (uint64_t)(unsigned)ncells) {
+      static uint64_t nwarn = 0;
+      if (++nwarn <= 5u || (nwarn % 1000u) == 0u)
+        fprintf(stderr,
+                "resgrid_plotter: IQ mq header prb×sym=%ux%u != plotter ncells=%d (check CUDA_IQ_PRB / CUDA_IQ_SYMBOLS)\n",
+                (unsigned)hp, (unsigned)hs, ncells);
+    }
+  }
+  return true;
 }
 
-/** Full-grid FIFO reader: each `read` is one complete I/Q grid (pipeline 2 or channel-mode IQ sidecar). */
-void external_grid_frame_reader_main(int fd, int ncells, GridFrameQueue* outq, const char* producer_stage) {
+/** Full-grid MQ reader: each logical frame is one complete I/Q grid (pipeline 2 or channel-mode IQ sidecar). */
+void external_grid_frame_reader_main(ResgridMqStreamIn* mq, int ncells, GridFrameQueue* outq, const char* producer_stage) {
   fprintf(stderr, "resgrid_plotter: external IQ reader → frame queue (cells=%d)\n", ncells);
   while (g_run.load()) {
     GridFrame gf;
-    if (!read_one_external_iq_frame(fd, ncells, gf)) break;
+    if (!read_one_external_iq_frame(mq, ncells, gf)) break;
     g_assembler_input_msgs.fetch_add(1, std::memory_order_relaxed);
     g_stage_output_count_assembler.fetch_add(1, std::memory_order_relaxed);
     outq->push(std::move(gf), producer_stage);
   }
+}
+
+ResgridMqStreamIn* AssemblerStage::assembler_open_iq_mq_reader(const char* path, const char* wait_label) {
+  fprintf(stderr, "resgrid_plotter: waiting for IQ writer on %s (%s)\n", path, wait_label);
+  auto* p = new ResgridMqStreamIn();
+  if (!p->open_read(path)) {
+    perror("open --mq-resource-grid");
+    delete p;
+    return nullptr;
+  }
+  return p;
 }
 
 static void run_internal_synthetic_producer_loop(InternalFrameQueue* q, void* fps_base, int fps_default, int ncells,
@@ -442,7 +392,7 @@ static void run_internal_synthetic_producer_loop(InternalFrameQueue* q, void* fp
 
 void AssemblerStage::assembler_configure(InternalFrameQueue* internal_q, void* fps_base, int fps, int ncells, int prb, int sym,
                                AssembledSlotQueue* slot_assembled_q, const std::string* fapi_fifo_path,
-                               ChannelModeIqSidecarQueue* iq_sidecar_q, int iq_fd_sidecar) {
+                               ChannelModeIqSidecarQueue* iq_sidecar_q, ResgridMqStreamIn* iq_mq_sidecar) {
   internal_q_ = internal_q;
   fps_base_ = fps_base;
   fps_ = fps;
@@ -452,13 +402,13 @@ void AssemblerStage::assembler_configure(InternalFrameQueue* internal_q, void* f
   slot_assembled_q_ = slot_assembled_q;
   fapi_fifo_path_ = fapi_fifo_path;
   iq_sidecar_q_ = iq_sidecar_q;
-  iq_fd_sidecar_ = iq_fd_sidecar;
+  iq_mq_sidecar_ = iq_mq_sidecar;
 }
 
 void AssemblerStage::assembler_run() {
   fprintf(stderr, "resgrid_plotter: Assembler stage thread started\n");
   const bool have_fapi_path = slot_assembled_q_ && fapi_fifo_path_ && !fapi_fifo_path_->empty();
-  const bool have_sidecar = have_fapi_path && iq_sidecar_q_ && iq_fd_sidecar_ >= 0;
+  const bool have_sidecar = have_fapi_path && iq_sidecar_q_ && iq_mq_sidecar_ && iq_mq_sidecar_->ok();
   const bool have_internal = internal_q_ && !have_fapi_path;
 
   std::vector<std::thread> workers;
@@ -469,8 +419,8 @@ void AssemblerStage::assembler_run() {
     workers.emplace_back(slot_message_assembler_main, *fapi_fifo_path_, prb_, sym_, ncells_, slot_assembled_q_);
   }
   if (have_sidecar) {
-    workers.emplace_back(external_grid_frame_reader_main, iq_fd_sidecar_, ncells_,
-                           static_cast<GridFrameQueue*>(iq_sidecar_q_), "Assembler (IQ FIFO sidecar)");
+    workers.emplace_back(external_grid_frame_reader_main, iq_mq_sidecar_, ncells_,
+                           static_cast<GridFrameQueue*>(iq_sidecar_q_), "Assembler (IQ MQ sidecar)");
   }
   for (auto& t : workers) {
     if (t.joinable()) t.join();
