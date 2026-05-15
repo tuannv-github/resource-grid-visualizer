@@ -9,9 +9,9 @@
 #
 # Set MTX_WEBRTC_ADDITIONAL_HOSTS in compose/.env to this machine's LAN IP (as browsers reach it).
 #
-# POSIX mq: /resgrid_rx (RX), /resgrid_nai_in (cuBB→sionna), /resgrid_nai_out (sionna→plotter). `ipc: host` on backends + cuBB.
-# cuPHY: CUPHY_RX_MQ_ENABLE + CUPHY_RX_MQ_PATH; CUPHY_NAI_MQ_ENABLE + CUPHY_NAI_MQ_PATH (NAIF in).
-# nai-sionna: CUPHY_NAI_MQ_PATH in, CUPHY_NAI_MQ_OUT_PATH out. Match CUPHY_RESGRID_PRB = 133 (or CUDA_IQ_PRB).
+# POSIX mq: /resgrid_rx (RX), /resgrid_nai (NAI NI grid from cuBB). `ipc: host` on backends + cuBB.
+# cuPHY: CUPHY_RX_MQ_ENABLE + CUPHY_RX_MQ_PATH; CUPHY_NAI_MQ_ENABLE + CUPHY_NAI_MQ_PATH.
+# Match CUPHY_RESGRID_PRB = 133 (or CUDA_IQ_PRB).
 
 include:
   - ../mediamtx/docker-compose.rxnai.yml
@@ -150,8 +150,8 @@ services:
       CUDA_IQ_PRESET: ${CUDA_IQ_PRESET:-p4}
       CUDA_IQ_PRB: ${CUDA_IQ_PRB:-133}
       CUDA_IQ_SYMBOLS: ${CUDA_IQ_SYMBOLS:-14}
-      CUPHY_NAI_MQ_OUT_PATH: ${CUPHY_NAI_MQ_OUT_PATH:-/resgrid_nai_out}
-      CUDA_IQ_MQ_PATH: ${CUPHY_NAI_MQ_OUT_PATH:-/resgrid_nai_out}
+      CUPHY_NAI_MQ_PATH: ${CUPHY_NAI_MQ_PATH:-/resgrid_nai}
+      CUDA_IQ_MQ_PATH: ${CUPHY_NAI_MQ_PATH:-/resgrid_nai}
       CUDA_IQ_GEN_FPS: ${CUDA_IQ_GEN_FPS:-200}
       CUDA_SLOT_MQ_PATH: ${CUDA_SLOT_MQ_PATH_NAI:-/resgrid_nai_slot}
       RESGRID_MQ_IMAGES: ${RESGRID_MQ_IMAGES_NAI:-/resgrid_nai_rgba}

@@ -69,11 +69,11 @@ CUDA_AUTO_START_IQ_GENERATOR = _env("CUDA_AUTO_START_IQ_GENERATOR", "0") == "1"
 # **--mq-resource-grid** + **--mq-fapi** + **--mq-images** are always part of **resgrid_plotter** argv (POSIX mq names).
 # Default POSIX mq for full-grid / sidecar I/Q (matches **resgrid_plotter** ``kDefaultMqResourceGridPath``).
 _DEFAULT_CUDA_IQ_MQ_PATH = "/resgrid_iq"
-# Compose sets CUDA_IQ_MQ_PATH per backend; fall back to CUPHY_RX_MQ_PATH or CUPHY_NAI_MQ_OUT_PATH.
+# Compose sets CUDA_IQ_MQ_PATH per backend; fall back to CUPHY_RX_MQ_PATH or CUPHY_NAI_MQ_PATH.
 CUDA_IQ_MQ_PATH = _env_first(
     "CUDA_IQ_MQ_PATH",
     "CUPHY_RX_MQ_PATH",
-    "CUPHY_NAI_MQ_OUT_PATH",
+    "CUPHY_NAI_MQ_PATH",
     default=_DEFAULT_CUDA_IQ_MQ_PATH,
 )
 # Default slot / FAPI mq (matches **resgrid_plotter** ``kDefaultMqFapiPath``).
