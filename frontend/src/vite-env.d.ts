@@ -30,10 +30,19 @@ interface ImportMetaEnv {
   /** When both DL and UL are set, the UI shows two columns (compose/docker-compose.dlul.yaml). */
   readonly VITE_API_BASE_DL?: string;
   readonly VITE_API_BASE_UL?: string;
-  /** Force single-column UI (one `ResgridPanel`) even if both API bases are set. Values: 1, true, yes, on. */
+  /** Second API for NAI column (compose/docker-compose.ulnai*.yaml). */
+  readonly VITE_API_BASE_NAI?: string;
+  /**
+   * GUI layout (build-time). **`combine`** | **`dlul`** | **`ulnai`** | **`auto`** (default).
+   * Compose: `VITE_GUI_MODE=dlul` for DL+UL stacks, `VITE_GUI_MODE=ulnai` for UL+NAI.
+   */
+  readonly VITE_GUI_MODE?: string;
+  /** @deprecated Use `VITE_GUI_MODE=combine`. */
   readonly VITE_GUI_COMBINE?: string;
-  /** Force dual DL/UL columns when both API bases exist (or set with dlul compose). Values: 1, true, yes, on. */
+  /** @deprecated Use `VITE_GUI_MODE=dlul`. */
   readonly VITE_GUI_DLUL?: string;
+  /** @deprecated Use `VITE_GUI_MODE=ulnai`. */
+  readonly VITE_GUI_ULNAI?: string;
   readonly VITE_HLS_URL?: string;
   readonly VITE_PLAYBACK_MODE?: string;
   /** When "0", skip `hardReconnectPlayback` (see `playbackAutoreconnect.ts`). */

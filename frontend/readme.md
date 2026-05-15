@@ -64,9 +64,10 @@ These are baked in at **build time** (Vite). Restart dev server after changing t
 | **`VITE_API_RELATIVE`** | When truthy (`1`, `true`, …), API base is **same-origin** (empty string) — use with **`VITE_DEV_PROXY_TARGET`** so the browser only talks to **:5173**. |
 | **`VITE_DEV_PROXY_TARGET`** | Vite dev **only**: proxy `/api`, `/docs`, `/openapi.json`, `/redoc` to this URL (e.g. `http://backend:8081`). |
 | **`VITE_API_BASE`** | Absolute backend origin when not using relative + proxy. If unset, client defaults to **`http://<page-host>:8081`**. |
-| **`VITE_API_BASE_DL`** / **`VITE_API_BASE_UL`** | Dual-stack: downlink vs uplink FastAPI URLs; if both set, layout becomes **two columns** unless overridden. |
-| **`VITE_GUI_COMBINE`** | Force **one** column (single `ResgridPanel`) even when both DL/UL bases exist. |
-| **`VITE_GUI_DLUL`** | Force dual columns when both API bases exist (compose often sets this for DL/UL). |
+| **`VITE_API_BASE_DL`** / **`VITE_API_BASE_UL`** | DL/UL stack: downlink vs uplink FastAPI URLs (with **`VITE_GUI_MODE=dlul`**). |
+| **`VITE_API_BASE_UL`** / **`VITE_API_BASE_NAI`** | UL/NAI stack: uplink vs NAI FastAPI URLs (with **`VITE_GUI_MODE=ulnai`**). |
+| **`VITE_GUI_MODE`** | **`combine`** (single column), **`dlul`**, **`ulnai`**, or **`auto`** (infer from API bases). Compose sets this per stack. |
+| **`VITE_GUI_COMBINE`** / **`VITE_GUI_DLUL`** / **`VITE_GUI_ULNAI`** | Deprecated; use **`VITE_GUI_MODE`** instead. |
 | **`VITE_PLAYBACK_MODE`** | Default **`webrtc`** (WHEP). Set **`hls`** for LL-HLS. Per load: **`?playback=hls`** or **`?playback=webrtc`**. |
 | **`VITE_HLS_URL`** | Optional fixed HLS base when playback resolution needs a fallback (see `mediaPlayback.ts`). |
 | **`VITE_DEBUG`** | Set **`1`** for verbose **`[resgrid]`** logs; or open the app with **`?debug=1`**. |

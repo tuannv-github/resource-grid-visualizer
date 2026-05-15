@@ -1,30 +1,108 @@
 import { isPlaybackDebugEnabled } from "../config/debug";
-import { resolvePanels } from "../config/panelLayout";
+import { resolvePanels, type ResolvedGuiLayout } from "../config/panelLayout";
 import { ResgridPanel } from "../panel/ResgridPanel";
 
 const livePanels: ResgridPanel[] = [];
+
+const ALL_MEDIA_IDS = ["panel-dl-media", "panel-ul-media", "panel-nai-media"] as const;
+const ALL_CONTROLS_IDS = ["panel-dl-controls", "panel-ul-controls", "panel-nai-controls"] as const;
+
+function ensureNaiPanelsExist(): void {
+  const naiMediaExists = Boolean(document.getElementById("panel-nai-media"));
+  const naiControlsExists = Boolean(document.getElementById("panel-nai-controls"));
+  if (naiMediaExists && naiControlsExists) return;
+
+  const ulMedia = document.getElementById("panel-ul-media");
+  const ulControls = document.getElementById("panel-ul-controls");
+  const mediaStack = document.getElementById("rg-media-stack");
+  if (!ulMedia || !ulControls || !mediaStack) return;
+
+  if (!naiMediaExists) {
+    const naiMedia = ulMedia.cloneNode(true) as HTMLElement;
+    naiMedia.id = "panel-nai-media";
+    naiMedia.hidden = false;
+    naiMedia.removeAttribute("hidden");
+    naiMedia.setAttribute("data-direction", "nai");
+    naiMedia.setAttribute("aria-label", "Noise and Interference Isolation video");
+    mediaStack.appendChild(naiMedia);
+  }
+
+  if (!naiControlsExists) {
+    const naiControls = ulControls.cloneNode(true) as HTMLElement;
+    naiControls.id = "panel-nai-controls";
+    naiControls.hidden = false;
+    naiControls.removeAttribute("hidden");
+    const side = document.querySelector(".rg-dashboard__side");
+    if (side) side.appendChild(naiControls);
+    else ulControls.parentElement?.appendChild(naiControls);
+  }
+}
+
+/** Drop panels that are not part of this layout (ulnai: no DL; dlul: no NAI). */
+function prunePanelsNotInLayout(desiredMedia: Set<string>, desiredControls: Set<string>): void {
+  for (const id of ALL_MEDIA_IDS) {
+    if (!desiredMedia.has(id)) document.getElementById(id)?.remove();
+  }
+  for (const id of ALL_CONTROLS_IDS) {
+    if (!desiredControls.has(id)) document.getElementById(id)?.remove();
+  }
+}
+
+function applyLayoutRootClasses(app: HTMLElement, cfg: ResolvedGuiLayout): void {
+  app.classList.toggle("rg-app--dual", cfg.dual);
+  app.classList.remove("rg-app--dlul", "rg-app--ulnai", "rg-app--combine");
+  if (cfg.layoutMode === "dlul") app.classList.add("rg-app--dlul");
+  else if (cfg.layoutMode === "ulnai") app.classList.add("rg-app--ulnai");
+  else if (cfg.layoutMode === "combine") app.classList.add("rg-app--combine");
+}
+
+function syncDomToLayout(cfg: ResolvedGuiLayout): void {
+  const desiredMedia = new Set(cfg.panels.map((p) => p.id));
+  const desiredControls = new Set(cfg.panels.map((p) => p.controlsRootId));
+
+  if (desiredMedia.has("panel-nai-media")) {
+    ensureNaiPanelsExist();
+  }
+
+  prunePanelsNotInLayout(desiredMedia, desiredControls);
+
+  for (const id of desiredMedia) {
+    const el = document.getElementById(id);
+    if (el) {
+      el.hidden = false;
+      el.removeAttribute("hidden");
+    }
+  }
+  for (const id of desiredControls) {
+    const el = document.getElementById(id);
+    if (el) {
+      el.hidden = false;
+      el.removeAttribute("hidden");
+    }
+  }
+}
 
 export function bootApp(): void {
   const cfg = resolvePanels();
   const app = document.getElementById("app");
   if (!app) return;
-  app.classList.toggle("rg-app--dual", cfg.dual);
 
-  const ulMedia = document.getElementById("panel-ul-media");
-  const ulControls = document.getElementById("panel-ul-controls");
-  if (!cfg.dual) {
-    /* Combine / single-API: one stream — drop hidden UL markup (no second va-video-wrap / player). */
-    ulMedia?.remove();
-    ulControls?.remove();
-  } else {
-    if (ulMedia) ulMedia.hidden = false;
-    if (ulControls) ulControls.hidden = false;
-  }
+  applyLayoutRootClasses(app, cfg);
+  syncDomToLayout(cfg);
+
+  console.info(
+    "[resgrid] layout=%s panels=%s",
+    cfg.layoutMode,
+    cfg.panels.map((p) => p.id).join(", "),
+  );
 
   for (const spec of cfg.panels) {
     const mediaRoot = document.getElementById(spec.id);
     const controlsRoot = document.getElementById(spec.controlsRootId);
-    if (!mediaRoot || !controlsRoot) continue;
+    if (!mediaRoot || !controlsRoot) {
+      console.warn("[resgrid] missing DOM for panel", spec.id, spec.controlsRootId);
+      continue;
+    }
     const heading = controlsRoot.querySelector<HTMLElement>(".rg-panel-heading");
     if (heading) heading.textContent = spec.heading;
     const panel = new ResgridPanel(mediaRoot as HTMLElement, {

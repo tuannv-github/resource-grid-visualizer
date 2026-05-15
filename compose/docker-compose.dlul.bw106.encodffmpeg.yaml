@@ -201,9 +201,7 @@ services:
       VITE_DEV_PROXY_TARGET: ""
       VITE_API_BASE_DL: ${VITE_API_BASE_DL:-http://localhost:8081}
       VITE_API_BASE_UL: ${VITE_API_BASE_UL:-http://localhost:8082}
-      # GUI: 1 = two columns (default for this stack). Set VITE_GUI_COMBINE=1 to force single column.
-      VITE_GUI_DLUL: ${VITE_GUI_DLUL:-1}
-      VITE_GUI_COMBINE: ${VITE_GUI_COMBINE:-}
+      VITE_GUI_MODE: ${VITE_GUI_MODE:-dlul}
     ports:
       - "5173:5173"
     volumes:

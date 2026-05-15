@@ -7,18 +7,52 @@ export type PanelBoot = {
   controlsRootId: string;
   apiBase: string;
   playbackPath: string;
-  /** Distinct HTML **id** for each panel’s mode `<select>` (DL vs UL). */
+  /** Distinct HTML **id** for each panel’s mode `<select>`. */
   modeSelectId: string;
   heading: string;
 };
 
-export type GuiLayoutMode = "combine" | "dlul" | "auto";
+export type GuiLayoutMode = "combine" | "dlul" | "ulnai" | "auto";
 
 export type ResolvedGuiLayout = {
   dual: boolean;
   panels: PanelBoot[];
   layoutMode: GuiLayoutMode;
 };
+
+/**
+ * Primary GUI layout selector (Vite build-time).
+ * **`combine`** — one column, single API (`VITE_API_BASE` or relative proxy).
+ * **`dlul`** — Downlink + Uplink (`VITE_API_BASE_DL` + `VITE_API_BASE_UL`).
+ * **`ulnai`** — Uplink + NAI (`VITE_API_BASE_UL` + `VITE_API_BASE_NAI`; no DL panels).
+ * **`auto`** — infer from API bases (ul+nai → ulnai, dl+ul → dlul, else combine).
+ */
+export type GuiModeEnv = "combine" | "dlul" | "ulnai" | "auto";
+
+function parseGuiModeEnv(raw: string | undefined): GuiModeEnv | null {
+  const t = raw?.trim().toLowerCase();
+  if (!t) return null;
+  if (t === "combine" || t === "single" || t === "one") return "combine";
+  if (t === "dlul" || t === "dl_ul" || t === "dl-ul") return "dlul";
+  if (t === "ulnai" || t === "ul_nai" || t === "ul-nai") return "ulnai";
+  if (t === "auto") return "auto";
+  console.warn(
+    `[resgrid] Unknown VITE_GUI_MODE="${raw}"; use combine | dlul | ulnai | auto`,
+  );
+  return null;
+}
+
+/** Resolve layout mode: `VITE_GUI_MODE` wins; legacy `VITE_GUI_*` flags are fallbacks. */
+function resolveGuiModeEnv(): GuiModeEnv {
+  const explicit = parseGuiModeEnv(import.meta.env.VITE_GUI_MODE);
+  if (explicit) return explicit;
+
+  if (envTruthy(import.meta.env.VITE_GUI_COMBINE)) return "combine";
+  if (envTruthy(import.meta.env.VITE_GUI_ULNAI)) return "ulnai";
+  if (envTruthy(import.meta.env.VITE_GUI_DLUL)) return "dlul";
+
+  return "auto";
+}
 
 /**
  * If the UI is opened from a LAN host (e.g. http://10.1.101.34:5173) but VITE_* still points at
@@ -74,54 +108,31 @@ function dualPanels(dl: string, ul: string): PanelBoot[] {
   ];
 }
 
-export function resolvePanels(): ResolvedGuiLayout {
-  const wantCombine = envTruthy(import.meta.env.VITE_GUI_COMBINE);
-  const wantDlul = envTruthy(import.meta.env.VITE_GUI_DLUL);
-  const dl = import.meta.env.VITE_API_BASE_DL?.trim();
-  const ul = import.meta.env.VITE_API_BASE_UL?.trim();
+function ulNaiPanels(ul: string, nai: string): PanelBoot[] {
+  return [
+    {
+      id: "panel-ul-media",
+      controlsRootId: "panel-ul-controls",
+      apiBase: rewriteLoopbackApiBaseToPageHost(ul),
+      playbackPath: "live_ul",
+      modeSelectId: "mode-select-ul",
+      heading: "Uplink",
+    },
+    {
+      id: "panel-nai-media",
+      controlsRootId: "panel-nai-controls",
+      apiBase: rewriteLoopbackApiBaseToPageHost(nai),
+      playbackPath: "live_nai",
+      modeSelectId: "mode-select-nai",
+      heading: "NAI",
+    },
+  ];
+}
 
-  if (wantCombine && wantDlul) {
-    console.warn(
-      "[resgrid] VITE_GUI_COMBINE and VITE_GUI_DLUL are both set; using combine (single column).",
-    );
-  }
-
-  if (wantCombine) {
-    return {
-      dual: false,
-      layoutMode: "combine",
-      panels: [
-        {
-          id: "panel-dl-media",
-          controlsRootId: "panel-dl-controls",
-          apiBase: singleApiBase(),
-          playbackPath: "live",
-          modeSelectId: "mode-select-dl",
-          heading: "Live (MediaMTX)",
-        },
-      ],
-    };
-  }
-
-  const autoDual = Boolean(dl && ul);
-  if (wantDlul || autoDual) {
-    if (dl && ul) {
-      return {
-        dual: true,
-        layoutMode: wantDlul ? "dlul" : "auto",
-        panels: dualPanels(dl, ul),
-      };
-    }
-    if (wantDlul) {
-      console.warn(
-        "[resgrid] VITE_GUI_DLUL is set but VITE_API_BASE_DL and/or VITE_API_BASE_UL is missing; falling back to combine.",
-      );
-    }
-  }
-
+function combineLayout(): ResolvedGuiLayout {
   return {
     dual: false,
-    layoutMode: "auto",
+    layoutMode: "combine",
     panels: [
       {
         id: "panel-dl-media",
@@ -133,4 +144,51 @@ export function resolvePanels(): ResolvedGuiLayout {
       },
     ],
   };
+}
+
+export function resolvePanels(): ResolvedGuiLayout {
+  const mode = resolveGuiModeEnv();
+  const dl = import.meta.env.VITE_API_BASE_DL?.trim();
+  const ul = import.meta.env.VITE_API_BASE_UL?.trim();
+  const nai = import.meta.env.VITE_API_BASE_NAI?.trim();
+
+  if (mode === "combine") {
+    return combineLayout();
+  }
+
+  if (mode === "dlul") {
+    if (dl && ul) {
+      return { dual: true, layoutMode: "dlul", panels: dualPanels(dl, ul) };
+    }
+    console.warn(
+      "[resgrid] VITE_GUI_MODE=dlul but VITE_API_BASE_DL and/or VITE_API_BASE_UL is missing; showing DL/UL panels that have API bases (never NAI/combine).",
+    );
+    const panels: PanelBoot[] = [];
+    if (dl) panels.push(dualPanels(dl, ul || dl)[0]);
+    if (ul) panels.push(dualPanels(dl || ul, ul)[1]);
+    return { dual: panels.length > 1, layoutMode: "dlul", panels };
+  }
+
+  if (mode === "ulnai") {
+    if (ul && nai) {
+      return { dual: true, layoutMode: "ulnai", panels: ulNaiPanels(ul, nai) };
+    }
+    console.warn(
+      "[resgrid] VITE_GUI_MODE=ulnai but VITE_API_BASE_UL and/or VITE_API_BASE_NAI is missing; showing UL/NAI panels that have API bases (never DL/combine).",
+    );
+    const panels: PanelBoot[] = [];
+    if (ul) panels.push(ulNaiPanels(ul, nai || ul)[0]);
+    if (nai) panels.push(ulNaiPanels(ul || nai, nai)[1]);
+    return { dual: panels.length > 1, layoutMode: "ulnai", panels };
+  }
+
+  // auto: infer from API bases (ul+nai checked before dl+ul so stray VITE_API_BASE_DL does not force DL/UL)
+  if (ul && nai) {
+    return { dual: true, layoutMode: "ulnai", panels: ulNaiPanels(ul, nai) };
+  }
+  if (dl && ul) {
+    return { dual: true, layoutMode: "dlul", panels: dualPanels(dl, ul) };
+  }
+
+  return combineLayout();
 }

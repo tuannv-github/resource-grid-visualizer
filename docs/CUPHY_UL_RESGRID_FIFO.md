@@ -17,11 +17,36 @@ Transport is **POSIX message queues** only (Linux), with the **chunked RGMC head
 | **`CUPHY_RESGRID_ANTENNA`** | **`0…N_RX-1`**: coherent average over the 12 subcarriers of that antenna. **`-1`**: RMS magnitude across all antennas (re on wire, im **0**). |
 | **`CUPHY_RESGRID_ANT0_ONLY`** | **`1`** (default): if the tensor has **N_RX > 1** and **tight** strides `(1, dim0, dim0×dim1)`, D2H copies **only RX antenna 0** (one contiguous plane); the worker sees **dim2 = 1**. **`0`**: copy the full multi-antenna tensor. |
 
-**Cell selection:** export always uses aggregated PUSCH **cell index `0`** only (one logical frame per slot). **`CUPHY_RESGRID_PUSCH_CELL`** is not read.
+### Optional NAI export (second POSIX mq)
+
+Independent of the UL export above: a **second** worker thread writes **`cuphy_resgrid_mq_enqueue_nai_from_device`** to **`CUDA_IQ_MQ_PATH_NAI`** or **`CUPHY_NAI_RESGRID_MQ_PATH`**. Use a **different** mq name than UL (e.g. **`/resgrid_iq_nai`**) and a second FastAPI/plotter stack (see **`compose/docker-compose.ulnai.bw133.yaml`**).
+
+| Variable | Meaning |
+|----------|---------|
+| **`CUPHY_NAI_RESGRID_MQ_ENABLE`** | **`1`** / truthy enables NAI export (separate from **`CUPHY_RESGRID_MQ_ENABLE`**). |
+| **`CUDA_IQ_MQ_PATH_NAI`** | POSIX mq name for NAI (must start with **`/`**), e.g. **`/resgrid_iq_nai`**. |
+| **`CUPHY_NAI_RESGRID_MQ_PATH`** | Optional override if **`CUDA_IQ_MQ_PATH_NAI`** is unset. |
+| **`CUPHY_NAI_RESGRID_PRB`** / **`CUPHY_NAI_RESGRID_SYMBOLS`** / **`CUPHY_NAI_RESGRID_ANTENNA`** / **`CUPHY_NAI_RESGRID_ANT0_ONLY`** | Optional; if unset, the NAI worker falls back to the same **`CUPHY_RESGRID_*`** / **`CUDA_IQ_*`** values as UL. |
+| **`CUPHY_NAI_USE_TB_REMOD`** | If truthy, rebuild **`tx̂`** on data REs from **`pTbPayloadsDevice`** (decoded bits) before **`H·tx̂`**; default uses hard-sliced **`DataEq`**. |
+
+**NAI PHY behavior (full-cell isolation, cell 0):** **`cuphyUlNaiSlotBegin`** copies full-cell **`DataRx`**. Each enabled UL channel subtracts on its REs only; elsewhere **`nai = rx`**. **PUSCH** uses **`pusch_nai_grid`** (`H`, **`DataEq`**). **PUCCH/PRACH/SRS** use allocation masks (see env below). **`cuphyUlNaiFinalizeExport`** runs after PUSCH+PUCCH+PRACH+SRS complete. UL mq remains raw **`DataRx`**.
+
+| Variable | Meaning |
+|----------|---------|
+| **`CUPHY_NAI_CELL_IDX`** | Target cell index (default **0** = radio 0). |
+| **`CUPHY_NAI_UE_GROUP_IDX`** | PUSCH UE group on that cell (default **0**). |
+| **`CUPHY_NAI_RESGRID_ANTENNA`** / **`CUPHY_NAI_RESGRID_ANT0_ONLY`** | Export RX **0** only (default **ant 0**). |
+| **`CUPHY_NAI_PUSCH_ENABLE`** / **`PUCCH`** / **`PRACH`** / **`SRS`** | Per-channel subtract (**1** default). Set **0** to skip. |
+
+Tensor layouts: [`oai-nvidia/cuBB/cuPHY/docs/PUSCH_NAI_TENSOR_LAYOUTS.md`](../../oai-nvidia/cuBB/cuPHY/docs/PUSCH_NAI_TENSOR_LAYOUTS.md).
+
+**Compose (UL+NAI):** Match **`CUDA_IQ_MQ_PATH=/resgrid_iq_ul`** and **`CUDA_IQ_MQ_PATH_NAI=/resgrid_iq_nai`** on cuBB and the visualizer (`compose/docker-compose.ulnai.bw133.yaml`). Example cuBB: [`gh81_compal13/docker-compose.yaml`](../../gh81_compal13/docker-compose.yaml). Start plotters with **`AUTO_START=1`** or **`POST /api/plotter/start`** on **:8082** (UL) and **:8083** (NAI).
+
+**Cell selection:**
 
 **Non-Linux:** export is disabled (no-op). **Linux** without **`CUDA_IQ_MQ_PATH`** or **`CUPHY_RESGRID_MQ_PATH`**: the enable flag is ignored for enqueue (stderr hints).
 
-**Datalake / `cpuCopyOn`:** Export uses a **separate async D2H** from **`PuschRx::copyUlToResgridMq`** (prefers **`pDataIn->pTDataRx`**, i.e. the same **UL stage-1** buffer the driver wires to PUSCH) into internal pinned staging. It does **not** require **`pDataRxHost`** / datalake. If **`m_outputPrms.cpuCopyOn`** is false, the driver still runs **`phase2Stream`** waits and invokes **`copyUlToResgridMq`** during **`PUSCH_RUN_FULL_SLOT_COPY`** / **`PUSCH_RUN_ALL_PHASES`** so export works without full CPU decode copies. **`cuphyWriteDbgBufSynch`** may also call **`copyUlToResgridMq`** when export is enabled.
+**Datalake / `cpuCopyOn`:** Export uses a **separate async D2H** from **`PuschRx::copyUlToResgridMq`** (prefers **`pDataIn->pTDataRx`**, i.e. the same **UL stage-1** buffer the driver wires to PUSCH) into internal pinned staging. It does **not** require **`pDataRxHost`** / datalake. If **`m_outputPrms.cpuCopyOn`** is false, the driver still runs **`phase2Stream`** waits and invokes **`copyUlToResgridMq`** / **`copyNaiToResgridMq`** during **`PUSCH_RUN_FULL_SLOT_COPY`** / **`PUSCH_RUN_ALL_PHASES`** so export works without full CPU decode copies. **`cuphyWriteDbgBufSynch`** may also call these when the respective export flags are enabled.
 
 **Real-time behavior:** If the background worker is still converting or writing the previous frame, a new slot **drops** the export (counter increments internally) instead of blocking the PUSCH **`copyOutputToCPU`** path on a mutex wait.
 

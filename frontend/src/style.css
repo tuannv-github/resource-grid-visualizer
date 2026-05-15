@@ -66,7 +66,20 @@ body:has(.rg-media-card [data-role="video-axes"][data-iq-visible="true"]) .rg-ap
   overflow: hidden;
 }
 
-.rg-dashboard__media {
+/* Sizing context for tall vs wide auto-layout of #rg-media-stack */
+.rg-media-stack-host {
+  min-width: 0;
+  min-height: 0;
+  container-type: size;
+  container-name: rg-media-stack;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.rg-dashboard__media,
+#rg-media-stack {
+  flex: 1 1 0;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -75,10 +88,16 @@ body:has(.rg-media-card [data-role="video-axes"][data-iq-visible="true"]) .rg-ap
   overflow: hidden;
 }
 
-/* Dual DL + UL: two resource-grid streams beside each other, not stacked */
-.rg-app--dual .rg-dashboard__media {
+/* Dual (DL+UL or UL+NAI): side-by-side when host is wide, stacked when tall */
+.rg-app--dual #rg-media-stack {
   flex-direction: row;
   align-items: stretch;
+}
+
+@container rg-media-stack (aspect-ratio < 1) {
+  .rg-app--dual #rg-media-stack {
+    flex-direction: column;
+  }
 }
 
 .rg-dashboard__side {
@@ -114,6 +133,24 @@ body:has(.rg-media-card [data-role="video-axes"][data-iq-visible="true"]) .rg-ap
 
 .rg-app--dual .rg-media-card {
   flex: 1 1 0;
+}
+
+/* Layout modes: hide panels that must not appear in this stack */
+.rg-app--ulnai #panel-dl-media,
+.rg-app--ulnai #panel-dl-controls {
+  display: none !important;
+}
+
+.rg-app--dlul #panel-nai-media,
+.rg-app--dlul #panel-nai-controls {
+  display: none !important;
+}
+
+.rg-app--combine #panel-ul-media,
+.rg-app--combine #panel-ul-controls,
+.rg-app--combine #panel-nai-media,
+.rg-app--combine #panel-nai-controls {
+  display: none !important;
 }
 
 /* One outer box per stream (DL / UL); inner sections are .rg-subexpando */
