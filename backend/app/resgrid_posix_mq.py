@@ -10,6 +10,7 @@ import ctypes
 import ctypes.util
 import errno
 import os
+import resource
 import struct
 from typing import Optional
 
@@ -117,6 +118,92 @@ def _mq_err() -> OSError:
     return OSError(err, os.strerror(err))
 
 
+def posix_mq_queue_count() -> int:
+    """Number of named queues visible under ``/dev/mqueue`` (host IPC namespace)."""
+    try:
+        return len(os.listdir("/dev/mqueue"))
+    except OSError:
+        return -1
+
+
+def posix_mq_bytes_per_queue_estimate() -> int:
+    """Kernel charges ``maxmsg * msgsize`` per queue at create time (see ``RLIMIT_MSGQUEUE``)."""
+    return effective_maxmsg() * effective_msgsize_cap()
+
+
+def posix_mq_bytes_used_estimate() -> int:
+    """Rough per-user POSIX mq byte budget in use (queue count × per-queue charge)."""
+    n = posix_mq_queue_count()
+    if n < 0:
+        return -1
+    return n * posix_mq_bytes_per_queue_estimate()
+
+
+def raise_process_msgqueue_limit(min_soft: int = 16 * 1024 * 1024) -> tuple[int, int]:
+    """Raise ``RLIMIT_MSGQUEUE`` (bytes). Docker defaults to 819200, which fits only ~9 queues at 10×8192."""
+    ev = (os.environ.get("RESGRID_MQ_BYTES_LIMIT") or "").strip()
+    if ev:
+        try:
+            min_soft = int(ev, 10)
+        except ValueError:
+            pass
+    soft, hard = resource.getrlimit(resource.RLIMIT_MSGQUEUE)
+    cap = hard if hard != resource.RLIM_INFINITY else min_soft
+    target = min(min_soft, cap)
+    if soft < target:
+        try:
+            resource.setrlimit(resource.RLIMIT_MSGQUEUE, (target, hard))
+            soft, hard = resource.getrlimit(resource.RLIMIT_MSGQUEUE)
+        except (ValueError, OSError):
+            pass
+    return soft, hard
+
+
+def raise_process_nofile_limit(min_soft: int = 65536) -> tuple[int, int]:
+    """Raise ``RLIMIT_NOFILE`` soft limit toward ``min_soft`` (capped by hard). Returns (soft, hard) after."""
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    cap = hard if hard != resource.RLIM_INFINITY else min_soft
+    target = min(min_soft, cap)
+    if soft < target:
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+            soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        except (ValueError, OSError):
+            pass
+    return soft, hard
+
+
+def _mq_create_err(name: str) -> OSError:
+    err = ctypes.get_errno()
+    if err != errno.EMFILE:
+        return _mq_err()
+    nofile_soft, nofile_hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    mq_soft, mq_hard = resource.getrlimit(resource.RLIMIT_MSGQUEUE)
+    n_mq = posix_mq_queue_count()
+    used_b = posix_mq_bytes_used_estimate()
+    per_q = posix_mq_bytes_per_queue_estimate()
+    mq_hint = ""
+    if mq_soft != resource.RLIM_INFINITY and used_b >= 0 and used_b + per_q > mq_soft:
+        mq_hint = (
+            f" RLIMIT_MSGQUEUE soft={mq_soft} hard={mq_hard} "
+            f"(≈{used_b} bytes used for {n_mq} queues, need ≈{per_q} more). "
+            "Add compose ulimits.msgqueue (e.g. 16777216) and recreate backend containers."
+        )
+    elif mq_soft <= 819200:
+        mq_hint = (
+            f" RLIMIT_MSGQUEUE soft={mq_soft} (Docker default 819200 fits ~9 queues at 10×8192). "
+            "Add ulimits.msgqueue: {soft: 16777216, hard: 16777216} on backend services."
+        )
+    return OSError(
+        err,
+        (
+            f"Cannot create POSIX mq {name!r} (errno EMFILE; /dev/mqueue entries≈{n_mq}, "
+            f"RLIMIT_NOFILE soft={nofile_soft} hard={nofile_hard}).{mq_hint} "
+            "When cuBB/plotters are stopped, prune stale names: ls /dev/mqueue; mq_unlink unused resgrid_*."
+        ),
+    )
+
+
 def mq_unlink(name: str) -> None:
     if not name or not name.startswith("/"):
         return
@@ -144,7 +231,7 @@ def mq_create_queue(name: str, maxmsg: Optional[int] = None, msgsize: Optional[i
     mq_unlink(name)
     mqd = _mq_open_create(name.encode(), _O_CREAT | _O_RDONLY, 0o666, attr)
     if mqd < 0:
-        raise _mq_err()
+        raise _mq_create_err(name)
     if _mq_close(mqd) != 0:
         raise _mq_err()
 

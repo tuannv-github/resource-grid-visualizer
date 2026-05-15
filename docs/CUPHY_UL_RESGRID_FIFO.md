@@ -26,16 +26,16 @@ Independent of the UL export above: a **second** worker thread writes **`cuphy_r
 | **`CUPHY_NAI_RESGRID_MQ_ENABLE`** | **`1`** / truthy enables NAI export (separate from **`CUPHY_RESGRID_MQ_ENABLE`**). |
 | **`CUDA_IQ_MQ_PATH_NAI`** | POSIX mq name for NAI (must start with **`/`**), e.g. **`/resgrid_iq_nai`**. |
 | **`CUPHY_NAI_RESGRID_MQ_PATH`** | Optional override if **`CUDA_IQ_MQ_PATH_NAI`** is unset. |
-| **`CUPHY_NAI_RESGRID_PRB`** / **`CUPHY_NAI_RESGRID_SYMBOLS`** / **`CUPHY_NAI_RESGRID_ANTENNA`** / **`CUPHY_NAI_RESGRID_ANT0_ONLY`** | Optional; if unset, the NAI worker falls back to the same **`CUPHY_RESGRID_*`** / **`CUDA_IQ_*`** values as UL. |
-| **`CUPHY_NAI_USE_TB_REMOD`** | If truthy, rebuild **`tx̂`** on data REs from **`pTbPayloadsDevice`** (decoded bits) before **`H·tx̂`**; default uses hard-sliced **`DataEq`**. |
+| **`CUPHY_NAI_RESGRID_PRB`** / **`CUPHY_NAI_RESGRID_SYMBOLS`** / **`CUPHY_NAI_RESGRID_ANTENNA`** | Optional; if unset, the NAI worker falls back to the same **`CUPHY_RESGRID_*`** / **`CUDA_IQ_*`** values as UL. |
+| *(PUSCH NAI)* | **`tx̂`** on data REs is always rebuilt from **`pTbPayloadsDevice`** (decoded bits) before **`H·tx̂`** when payloads are available. |
 
 **NAI PHY behavior (full-cell isolation, cell 0):** **`cuphyUlNaiSlotBegin`** copies full-cell **`DataRx`**. Each enabled UL channel subtracts on its REs only; elsewhere **`nai = rx`**. **PUSCH** uses **`pusch_nai_grid`** (`H`, **`DataEq`**). **PUCCH/PRACH/SRS** use allocation masks (see env below). **`cuphyUlNaiFinalizeExport`** runs after PUSCH+PUCCH+PRACH+SRS complete. UL mq remains raw **`DataRx`**.
 
 | Variable | Meaning |
 |----------|---------|
 | **`CUPHY_NAI_CELL_IDX`** | Target cell index (default **0** = radio 0). |
-| **`CUPHY_NAI_UE_GROUP_IDX`** | PUSCH UE group on that cell (default **0**). |
-| **`CUPHY_NAI_RESGRID_ANTENNA`** / **`CUPHY_NAI_RESGRID_ANT0_ONLY`** | Export RX **0** only (default **ant 0**). |
+| *(none)* | All PUSCH UE groups on `CUPHY_NAI_CELL_IDX` are subtracted (no per-group env). |
+| **`CUPHY_NAI_RESGRID_ANTENNA`** | RX index for export (**`0…N_RX-1`**, default **0**); D2H copies that antenna plane only. **`-1`**: RMS over all RX (full tensor D2H). |
 | **`CUPHY_NAI_PUSCH_ENABLE`** / **`PUCCH`** / **`PRACH`** / **`SRS`** | Per-channel subtract (**1** default). Set **0** to skip. |
 
 Tensor layouts: [`oai-nvidia/cuBB/cuPHY/docs/PUSCH_NAI_TENSOR_LAYOUTS.md`](../../oai-nvidia/cuBB/cuPHY/docs/PUSCH_NAI_TENSOR_LAYOUTS.md).
@@ -73,5 +73,6 @@ Compare PUSCH slot timing or underflow counters with the export **disabled** vs 
 3. **Exact mq name:** **`CUDA_IQ_MQ_PATH`** (or **`CUPHY_RESGRID_MQ_PATH`**) must match the backend (**`/resgrid_iq`** by default; DL/UL stacks use **`_dl` / `_ul`** suffix names).
 4. **Enable export:** **`CUPHY_RESGRID_MQ_ENABLE=1`** (or truthy; legacy **`CUPHY_RESGRID_FIFO_ENABLE`**) must be set in the PHY process.
 5. **Host checks:** After starting the backend plotter, on the Linux host run **`ls -la /dev/mqueue/`** — you should see the configured names (e.g. **`resgrid_iq`**). If nothing appears, the backend did not create the queues yet or a different IPC namespace is in use.
+6. **`OSError: [Errno 24]`** on **`POST /api/plotter/start`**: Usually **`RLIMIT_MSGQUEUE`** (Docker default **819200** bytes ≈ **9** queues at **10×8192**), not **`RLIMIT_NOFILE`**. UL+NAI compose sets **`ulimits.msgqueue: 16777216`** on **`backend-ul`** / **`backend-nai`** — recreate those containers after changing compose. With **cuBB/plotters stopped**, prune stale names: **`ls /dev/mqueue`**; **`mq_unlink`** unused **`resgrid_*`** (legacy **`/resgrid_iq`** without **`_ul`** / **`_nai`** suffixes are common leftovers). Raise **`sysctl fs.mqueue.queues_max`** only if **`queues_max`** is the bottleneck.
 
 **Note:** This file name still contains `FIFO` for historic links; cuPHY now uses **POSIX mq only**.

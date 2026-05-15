@@ -13,6 +13,14 @@ include:
 services:
   backend-ul:
     ipc: host
+    # Docker default RLIMIT_MSGQUEUE is 819200 bytes (~9 queues at 10×8192). UL+NAI needs headroom.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+      msgqueue:
+        soft: 16777216
+        hard: 16777216
     build:
       context: ..
       dockerfile: backend/Dockerfile
@@ -94,6 +102,13 @@ services:
 
   backend-nai:
     ipc: host
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+      msgqueue:
+        soft: 16777216
+        hard: 16777216
     build:
       context: ..
       dockerfile: backend/Dockerfile

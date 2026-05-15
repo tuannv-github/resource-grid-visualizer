@@ -23,7 +23,14 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .access_log import HttpAccessLogMiddleware
 from .log_config import get_logger, setup_backend_logging
-from .resgrid_posix_mq import mq_create_queue, mq_unlink
+from .resgrid_posix_mq import (
+    mq_create_queue,
+    mq_unlink,
+    posix_mq_bytes_used_estimate,
+    posix_mq_queue_count,
+    raise_process_msgqueue_limit,
+    raise_process_nofile_limit,
+)
 
 
 def _env(name: str, default: str) -> str:
@@ -2427,6 +2434,27 @@ async def lifespan(app: FastAPI):
         rotate_utc=ru,
     )
     _init_effective_video_encoder()
+    nofile_soft, nofile_hard = raise_process_nofile_limit()
+    mq_soft, mq_hard = raise_process_msgqueue_limit()
+    n_mq = posix_mq_queue_count()
+    if n_mq >= 0:
+        used_b = posix_mq_bytes_used_estimate()
+        mq_warn = (
+            f" high /dev/mqueue count ({n_mq}); prune stale resgrid_* when L1 is stopped"
+            if n_mq > 128
+            else ""
+        )
+        _log.info(
+            "RLIMIT_NOFILE soft=%s hard=%s RLIMIT_MSGQUEUE soft=%s hard=%s "
+            "/dev/mqueue entries=%s bytes_est=%s%s",
+            nofile_soft,
+            nofile_hard,
+            mq_soft,
+            mq_hard,
+            n_mq,
+            used_b,
+            mq_warn,
+        )
     _log.info(
         "Backend starting (AUTO_START=%s GENERATION_MODE=%s video_encoder_requested=%s effective=%s)",
         AUTO_START,
