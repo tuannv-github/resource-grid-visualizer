@@ -30,18 +30,22 @@ interface ImportMetaEnv {
   /** When both DL and UL are set, the UI shows two columns (compose/docker-compose.dlul.yaml). */
   readonly VITE_API_BASE_DL?: string;
   readonly VITE_API_BASE_UL?: string;
-  /** Second API for NAI column (compose/docker-compose.ulnai*.yaml). */
+  /** RX column API (compose/docker-compose.rxnai*.yaml). Falls back to `VITE_API_BASE_UL`. */
+  readonly VITE_API_BASE_RX?: string;
+  /** NAI column API (compose/docker-compose.rxnai*.yaml). */
   readonly VITE_API_BASE_NAI?: string;
   /**
-   * GUI layout (build-time). **`combine`** | **`dlul`** | **`ulnai`** | **`auto`** (default).
-   * Compose: `VITE_GUI_MODE=dlul` for DL+UL stacks, `VITE_GUI_MODE=ulnai` for UL+NAI.
+   * GUI layout (build-time). **`combine`** | **`dlul`** | **`rxnai`** | **`auto`** (default).
+   * Compose: `VITE_GUI_MODE=dlul` for DL+UL stacks, `VITE_GUI_MODE=rxnai` for RX+NAI.
    */
   readonly VITE_GUI_MODE?: string;
   /** @deprecated Use `VITE_GUI_MODE=combine`. */
   readonly VITE_GUI_COMBINE?: string;
   /** @deprecated Use `VITE_GUI_MODE=dlul`. */
   readonly VITE_GUI_DLUL?: string;
-  /** @deprecated Use `VITE_GUI_MODE=ulnai`. */
+  /** @deprecated Use `VITE_GUI_MODE=rxnai`. */
+  readonly VITE_GUI_RXNAI?: string;
+  /** @deprecated Use `VITE_GUI_MODE=rxnai`. */
   readonly VITE_GUI_ULNAI?: string;
   readonly VITE_HLS_URL?: string;
   readonly VITE_PLAYBACK_MODE?: string;

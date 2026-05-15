@@ -1,0 +1,26 @@
+logLevel: info
+
+rtspAddress: :8554
+hlsAddress: :8888
+webrtcAddress: :8889
+
+hlsVariant: lowLatency
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsSegmentCount: 7
+hlsAllowOrigins: ["*"]
+webrtcAllowOrigins: ["*"]
+
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: :8189
+webrtcHandshakeTimeout: 30s
+
+webrtcIPsFromInterfaces: true
+
+pathDefaults:
+  source: publisher
+
+# RX + NAI stack: backend-rx publishes live_rx, backend-nai publishes live_nai.
+paths:
+  live_rx:
+  live_nai:

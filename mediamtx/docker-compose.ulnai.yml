@@ -1,21 +1,3 @@
-# MediaMTX for UL + NAI stacks (`live_ul` / `live_nai`). Included by `compose/docker-compose.ulnai*.yaml`.
-# WebRTC ICE: set MTX_WEBRTC_ADDITIONAL_HOSTS in `compose/.env` or copy `mediamtx/.env.example`.
-
-services:
-  mediamtx:
-    image: bluenviron/mediamtx:1
-    deploy:
-      resources:
-        limits:
-          memory: 512m
-    memswap_limit: 512m
-    environment:
-      MTX_WEBRTCADDITIONALHOSTS: ${MTX_WEBRTC_ADDITIONAL_HOSTS}
-    volumes:
-      - ./mediamtx.ulnai.yml:/mediamtx.yml:ro
-    ports:
-      - "8554:8554"
-      - "8888:8888"
-      - "8889:8889"
-      - "8189:8189/tcp"
-      - "8189:8189/udp"
+# Deprecated — use docker-compose.rxnai.yml
+include:
+  - docker-compose.rxnai.yml

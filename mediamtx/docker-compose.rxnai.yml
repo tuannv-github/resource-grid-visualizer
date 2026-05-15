@@ -1,0 +1,18 @@
+# MediaMTX for RX + NAI stacks (`live_rx` / `live_nai`). Included by `compose/docker-compose.rxnai*.yaml`.
+# WebRTC ICE: set MTX_WEBRTC_ADDITIONAL_HOSTS in `compose/.env` (see `compose/.env.example`).
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:latest-ffmpeg
+    container_name: mediamtx-rxnai
+    env_file:
+      - ../compose/.env
+    environment:
+      MTX_WEBRTCADDITIONALHOSTS: ${MTX_WEBRTC_ADDITIONAL_HOSTS:-}
+    ports:
+      - "8554:8554"
+      - "8888:8888"
+      - "8889:8889"
+      - "8189:8189/tcp"
+      - "8189:8189/udp"
+    volumes:
+      - ./mediamtx.rxnai.yml:/mediamtx.yml:ro

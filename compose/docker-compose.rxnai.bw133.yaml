@@ -1,19 +1,28 @@
-# UL + NAI stack (133 PRB): MediaMTX (live_ul / live_nai) + two FastAPI backends (:8082 UL, :8083 NAI) + Vite frontend.
-# Frontend: VITE_GUI_MODE=ulnai (no DL panels even if VITE_API_BASE_DL is set in host .env).
-# From resource-grid-visualizer (parent of compose/):
-#   docker compose -f compose/docker-compose.ulnai.bw133.yaml up
+# RX + NAI stack (133 PRB): MediaMTX (live_rx / live_nai) + two FastAPI backends (:8082 RX, :8083 NAI) + Vite frontend.
 #
-# POSIX mq: CUDA_IQ_MQ_PATH_UL / _NAI (defaults /resgrid_iq_ul, /resgrid_iq_nai). `ipc: host` on backends + cuBB.
-# cuPHY: CUPHY_RESGRID_MQ_ENABLE + CUDA_IQ_MQ_PATH for UL; CUPHY_NAI_RESGRID_MQ_ENABLE + CUDA_IQ_MQ_PATH_NAI for NAI.
-# Match cuPHY: CUPHY_RESGRID_PRB / CUPHY_NAI_RESGRID_PRB = 133 (or CUDA_IQ_PRB).
+# Env file (required for LAN WebRTC video): copy and edit host IP
+#   cp compose/.env.example compose/.env
+# Run from resource-grid-visualizer/:
+#   docker compose -f compose/docker-compose.rxnai.bw133.yaml up
+# Or from compose/ (`.env` in cwd):
+#   docker compose -f docker-compose.rxnai.bw133.yaml up
+#
+# Set MTX_WEBRTC_ADDITIONAL_HOSTS in compose/.env to this machine's LAN IP (as browsers reach it).
+#
+# POSIX mq: /resgrid_rx (RX), /resgrid_nai_in (cuBB→sionna), /resgrid_nai_out (sionna→plotter). `ipc: host` on backends + cuBB.
+# cuPHY: CUPHY_RX_MQ_ENABLE + CUPHY_RX_MQ_PATH; CUPHY_NAI_MQ_ENABLE + CUPHY_NAI_MQ_PATH (NAIF in).
+# nai-sionna: CUPHY_NAI_MQ_PATH in, CUPHY_NAI_MQ_OUT_PATH out. Match CUPHY_RESGRID_PRB = 133 (or CUDA_IQ_PRB).
 
 include:
-  - ../mediamtx/docker-compose.ulnai.yml
+  - ../mediamtx/docker-compose.rxnai.yml
+
+x-env-file: &env_file
+  - .env
 
 services:
-  backend-ul:
+  backend-rx:
+    env_file: *env_file
     ipc: host
-    # Docker default RLIMIT_MSGQUEUE is 819200 bytes (~9 queues at 10×8192). UL+NAI needs headroom.
     ulimits:
       nofile:
         soft: 65536
@@ -39,10 +48,10 @@ services:
     environment:
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,video,utility}
-      MTX_RTSP_URL: rtsp://mediamtx:8554/live_ul
+      MTX_RTSP_URL: rtsp://mediamtx:8554/live_rx
       MTX_WAIT_HOST: mediamtx
       MTX_WAIT_PORT: "8554"
-      AUTO_START: ${AUTO_START:-0}
+      AUTO_START: ${AUTO_START_RX:-1}
       CUDA_AUTO_START_IQ_GENERATOR: ${CUDA_AUTO_START_IQ_GENERATOR:-0}
       GENERATION_MODE: ${GENERATION_MODE:-SYNTHETIC_FAPI}
       VIDEO_ENCODER: ${VIDEO_ENCODER:-nvenc}
@@ -51,14 +60,15 @@ services:
       CUDA_IQ_PRESET: ${CUDA_IQ_PRESET:-p4}
       CUDA_IQ_PRB: ${CUDA_IQ_PRB:-133}
       CUDA_IQ_SYMBOLS: ${CUDA_IQ_SYMBOLS:-14}
-      CUDA_IQ_MQ_PATH: ${CUDA_IQ_MQ_PATH_UL:-/resgrid_iq_ul}
+      CUPHY_RX_MQ_PATH: ${CUPHY_RX_MQ_PATH:-/resgrid_rx}
+      CUDA_IQ_MQ_PATH: ${CUPHY_RX_MQ_PATH:-/resgrid_rx}
       CUDA_IQ_GEN_FPS: ${CUDA_IQ_GEN_FPS:-200}
-      CUDA_SLOT_MQ_PATH: ${CUDA_SLOT_MQ_PATH_UL:-/resgrid_slot_ul}
-      RESGRID_MQ_IMAGES: ${RESGRID_MQ_IMAGES_UL:-/resgrid_rgba_ul}
-      RESGRID_CAPTURER_DIR: ${RESGRID_CAPTURER_DIR_UL:-/encoder-snaps}
+      CUDA_SLOT_MQ_PATH: ${CUDA_SLOT_MQ_PATH_RX:-/resgrid_rx_slot}
+      RESGRID_MQ_IMAGES: ${RESGRID_MQ_IMAGES_RX:-/resgrid_rx_rgba}
+      RESGRID_CAPTURER_DIR: ${RESGRID_CAPTURER_DIR_RX:-/encoder-snaps-rx}
       MTX_PUBLIC_HTTP_BASE: ${MTX_PUBLIC_HTTP_BASE:-http://localhost:8888}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
-      LOG_FILE: ${LOG_FILE_UL:-/app/logs/server_ul.log}
+      LOG_FILE: ${LOG_FILE_RX:-/app/logs/server_rx.log}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_MAX_BYTES: ${LOG_MAX_BYTES:-5000000}
       LOG_BACKUP_COUNT: ${LOG_BACKUP_COUNT:-3}
@@ -72,7 +82,7 @@ services:
       - "8082:8081"
     volumes:
       - ${RESGRID_HOST_TMP:-../host-tmp}:/tmp
-      - ${RESGRID_HOST_CAPTURER_SNAPS_UL:-../encoder-snaps-ul}:/encoder-snaps
+      - ${RESGRID_HOST_CAPTURER_SNAPS_RX:-../encoder-snaps-rx}:/encoder-snaps
       - ../backend/app:/app/app
       - ../backend/scripts:/app/scripts
       - ../backend/logs:/app/logs
@@ -101,6 +111,7 @@ services:
           path: ../backend/plotter/include/viridis_lut.inc
 
   backend-nai:
+    env_file: *env_file
     ipc: host
     ulimits:
       nofile:
@@ -139,11 +150,12 @@ services:
       CUDA_IQ_PRESET: ${CUDA_IQ_PRESET:-p4}
       CUDA_IQ_PRB: ${CUDA_IQ_PRB:-133}
       CUDA_IQ_SYMBOLS: ${CUDA_IQ_SYMBOLS:-14}
-      CUDA_IQ_MQ_PATH: ${CUDA_IQ_MQ_PATH_NAI:-/resgrid_iq_nai}
+      CUPHY_NAI_MQ_OUT_PATH: ${CUPHY_NAI_MQ_OUT_PATH:-/resgrid_nai_out}
+      CUDA_IQ_MQ_PATH: ${CUPHY_NAI_MQ_OUT_PATH:-/resgrid_nai_out}
       CUDA_IQ_GEN_FPS: ${CUDA_IQ_GEN_FPS:-200}
-      CUDA_SLOT_MQ_PATH: ${CUDA_SLOT_MQ_PATH_NAI:-/resgrid_slot_nai}
-      RESGRID_MQ_IMAGES: ${RESGRID_MQ_IMAGES_NAI:-/resgrid_rgba_nai}
-      RESGRID_CAPTURER_DIR: ${RESGRID_CAPTURER_DIR_NAI:-/encoder-snaps}
+      CUDA_SLOT_MQ_PATH: ${CUDA_SLOT_MQ_PATH_NAI:-/resgrid_nai_slot}
+      RESGRID_MQ_IMAGES: ${RESGRID_MQ_IMAGES_NAI:-/resgrid_nai_rgba}
+      RESGRID_CAPTURER_DIR: ${RESGRID_CAPTURER_DIR_NAI:-/encoder-snaps-nai}
       MTX_PUBLIC_HTTP_BASE: ${MTX_PUBLIC_HTTP_BASE:-http://localhost:8888}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
       LOG_FILE: ${LOG_FILE_NAI:-/app/logs/server_nai.log}
@@ -189,7 +201,8 @@ services:
           path: ../backend/plotter/include/viridis_lut.inc
 
   frontend:
-    image: resouce-grid-frontend-vite-ulnai
+    env_file: *env_file
+    image: resouce-grid-frontend-vite-rxnai
     build:
       context: ../frontend
       dockerfile: Dockerfile.dev
@@ -202,17 +215,17 @@ services:
       VITE_PLAYBACK_MODE: ${VITE_PLAYBACK_MODE:-webrtc}
       VITE_API_RELATIVE: "0"
       VITE_DEV_PROXY_TARGET: ""
-      VITE_API_BASE_UL: ${VITE_API_BASE_UL:-http://localhost:8082}
+      VITE_API_BASE_RX: ${VITE_API_BASE_RX:-http://localhost:8082}
       VITE_API_BASE_NAI: ${VITE_API_BASE_NAI:-http://localhost:8083}
-      VITE_GUI_MODE: ${VITE_GUI_MODE:-ulnai}
+      VITE_GUI_MODE: ${VITE_GUI_MODE:-rxnai}
     ports:
       - "5173:5173"
     volumes:
       - ../frontend:/app
-      - resgrid_ulnai_frontend_node_modules:/app/node_modules
+      - resgrid_rxnai_frontend_node_modules:/app/node_modules
     depends_on:
       - mediamtx
-      - backend-ul
+      - backend-rx
       - backend-nai
     develop:
       watch:
@@ -224,4 +237,4 @@ services:
           path: ../frontend/package-lock.json
 
 volumes:
-  resgrid_ulnai_frontend_node_modules:
+  resgrid_rxnai_frontend_node_modules:

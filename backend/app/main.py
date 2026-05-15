@@ -38,6 +38,14 @@ def _env(name: str, default: str) -> str:
     return v if v is not None and v != "" else default
 
 
+def _env_first(*names: str, default: str = "") -> str:
+    for name in names:
+        v = os.environ.get(name)
+        if v is not None and str(v).strip() != "":
+            return str(v).strip()
+    return default
+
+
 MTX_RTSP_URL = _env("MTX_RTSP_URL", "rtsp://mediamtx:8554/live")
 MTX_HOST = _env("MTX_WAIT_HOST", "mediamtx")
 MTX_PORT = int(_env("MTX_WAIT_PORT", "8554"))
@@ -61,7 +69,13 @@ CUDA_AUTO_START_IQ_GENERATOR = _env("CUDA_AUTO_START_IQ_GENERATOR", "0") == "1"
 # **--mq-resource-grid** + **--mq-fapi** + **--mq-images** are always part of **resgrid_plotter** argv (POSIX mq names).
 # Default POSIX mq for full-grid / sidecar I/Q (matches **resgrid_plotter** ``kDefaultMqResourceGridPath``).
 _DEFAULT_CUDA_IQ_MQ_PATH = "/resgrid_iq"
-CUDA_IQ_MQ_PATH = _env("CUDA_IQ_MQ_PATH", _DEFAULT_CUDA_IQ_MQ_PATH)
+# Compose sets CUDA_IQ_MQ_PATH per backend; fall back to CUPHY_RX_MQ_PATH or CUPHY_NAI_MQ_OUT_PATH.
+CUDA_IQ_MQ_PATH = _env_first(
+    "CUDA_IQ_MQ_PATH",
+    "CUPHY_RX_MQ_PATH",
+    "CUPHY_NAI_MQ_OUT_PATH",
+    default=_DEFAULT_CUDA_IQ_MQ_PATH,
+)
 # Default slot / FAPI mq (matches **resgrid_plotter** ``kDefaultMqFapiPath``).
 _DEFAULT_CUDA_SLOT_MQ_PATH = "/resgrid_slot"
 CUDA_SLOT_MQ_PATH = _env("CUDA_SLOT_MQ_PATH", _DEFAULT_CUDA_SLOT_MQ_PATH)

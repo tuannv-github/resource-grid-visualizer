@@ -38,7 +38,7 @@ function ensureNaiPanelsExist(): void {
   }
 }
 
-/** Drop panels that are not part of this layout (ulnai: no DL; dlul: no NAI). */
+/** Drop panels that are not part of this layout (rxnai: no DL; dlul: no NAI). */
 function prunePanelsNotInLayout(desiredMedia: Set<string>, desiredControls: Set<string>): void {
   for (const id of ALL_MEDIA_IDS) {
     if (!desiredMedia.has(id)) document.getElementById(id)?.remove();
@@ -50,9 +50,11 @@ function prunePanelsNotInLayout(desiredMedia: Set<string>, desiredControls: Set<
 
 function applyLayoutRootClasses(app: HTMLElement, cfg: ResolvedGuiLayout): void {
   app.classList.toggle("rg-app--dual", cfg.dual);
-  app.classList.remove("rg-app--dlul", "rg-app--ulnai", "rg-app--combine");
+  app.classList.remove("rg-app--dlul", "rg-app--rxnai", "rg-app--ulnai", "rg-app--combine");
   if (cfg.layoutMode === "dlul") app.classList.add("rg-app--dlul");
-  else if (cfg.layoutMode === "ulnai") app.classList.add("rg-app--ulnai");
+  else if (cfg.layoutMode === "rxnai" || cfg.layoutMode === "ulnai") {
+    app.classList.add("rg-app--rxnai", "rg-app--ulnai");
+  }
   else if (cfg.layoutMode === "combine") app.classList.add("rg-app--combine");
 }
 

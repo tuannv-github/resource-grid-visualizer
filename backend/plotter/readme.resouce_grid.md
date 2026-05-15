@@ -64,7 +64,7 @@ There is **no** metadata plane in this stream (no `chan` / RNTI here). Channel c
 ## 4. Reader / writer behaviour (protocol-level)
 
 - The **backend** creates the queue (**`mq_unlink` + `mq_open(O_CREAT|O_RDONLY)`** with attrs, then closes) before spawning **`resgrid_plotter`**, which opens the name **`O_RDONLY`**. Producers open **`O_WRONLY`** and send chunked frames; **`mq_send`** may block when the queue is full (**backpressure**).
-- If the **reader** exits, the writer may see **`EPIPE`** (pipes) / **`mq_send`** errors; producers should **close** the descriptor and **re-open** when a reader returns. cuPHY uses **POSIX mq** via **`resgrid_mq_sink`** (chunked wire); see **`docs/CUPHY_UL_RESGRID_FIFO.md`** for env variables.
+- If the **reader** exits, the writer may see **`EPIPE`** (pipes) / **`mq_send`** errors; producers should **close** the descriptor and **re-open** when a reader returns. cuPHY uses **POSIX mq** via **`mq_sink_rx`** (chunked wire); see **`docs/CUPHY_UL_RESGRID_FIFO.md`** for env variables.
 
 ---
 

@@ -65,8 +65,8 @@ These are baked in at **build time** (Vite). Restart dev server after changing t
 | **`VITE_DEV_PROXY_TARGET`** | Vite dev **only**: proxy `/api`, `/docs`, `/openapi.json`, `/redoc` to this URL (e.g. `http://backend:8081`). |
 | **`VITE_API_BASE`** | Absolute backend origin when not using relative + proxy. If unset, client defaults to **`http://<page-host>:8081`**. |
 | **`VITE_API_BASE_DL`** / **`VITE_API_BASE_UL`** | DL/UL stack: downlink vs uplink FastAPI URLs (with **`VITE_GUI_MODE=dlul`**). |
-| **`VITE_API_BASE_UL`** / **`VITE_API_BASE_NAI`** | UL/NAI stack: uplink vs NAI FastAPI URLs (with **`VITE_GUI_MODE=ulnai`**). |
-| **`VITE_GUI_MODE`** | **`combine`** (single column), **`dlul`**, **`ulnai`**, or **`auto`** (infer from API bases). Compose sets this per stack. |
+| **`VITE_API_BASE_RX`** / **`VITE_API_BASE_NAI`** | RX/NAI stack: raw RX vs NAI FastAPI URLs (with **`VITE_GUI_MODE=rxnai`**). |
+| **`VITE_GUI_MODE`** | **`combine`** (single column), **`dlul`**, **`rxnai`**, or **`auto`** (infer from API bases). Compose sets this per stack. |
 | **`VITE_GUI_COMBINE`** / **`VITE_GUI_DLUL`** / **`VITE_GUI_ULNAI`** | Deprecated; use **`VITE_GUI_MODE`** instead. |
 | **`VITE_PLAYBACK_MODE`** | Default **`webrtc`** (WHEP). Set **`hls`** for LL-HLS. Per load: **`?playback=hls`** or **`?playback=webrtc`**. |
 | **`VITE_HLS_URL`** | Optional fixed HLS base when playback resolution needs a fallback (see `mediaPlayback.ts`). |

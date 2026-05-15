@@ -20,7 +20,7 @@ webrtcIPsFromInterfaces: true
 pathDefaults:
   source: publisher
 
-# UL + NAI stack: backend-ul publishes live_ul, backend-nai publishes live_nai.
+# Deprecated — use mediamtx.rxnai.yml (live_rx / live_nai).
 paths:
-  live_ul:
+  live_rx:
   live_nai:

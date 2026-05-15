@@ -136,6 +136,8 @@ body:has(.rg-media-card [data-role="video-axes"][data-iq-visible="true"]) .rg-ap
 }
 
 /* Layout modes: hide panels that must not appear in this stack */
+.rg-app--rxnai #panel-dl-media,
+.rg-app--rxnai #panel-dl-controls,
 .rg-app--ulnai #panel-dl-media,
 .rg-app--ulnai #panel-dl-controls {
   display: none !important;
