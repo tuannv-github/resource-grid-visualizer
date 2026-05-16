@@ -34,6 +34,10 @@ interface ImportMetaEnv {
   readonly VITE_API_BASE_RX?: string;
   /** NAI column API (compose/docker-compose.rxnai*.yaml). */
   readonly VITE_API_BASE_NAI?: string;
+  /** MediaMTX path for RX WHEP/HLS (default `live_rx`). */
+  readonly VITE_PLAYBACK_PATH_RX?: string;
+  /** MediaMTX path for NAI WHEP/HLS (default `live_nai`). */
+  readonly VITE_PLAYBACK_PATH_NAI?: string;
   /**
    * GUI layout (build-time). **`combine`** | **`dlul`** | **`rxnai`** | **`auto`** (default).
    * Compose: `VITE_GUI_MODE=dlul` for DL+UL stacks, `VITE_GUI_MODE=rxnai` for RX+NAI.

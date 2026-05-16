@@ -235,6 +235,26 @@ export class MediaPlayback {
     return undefined;
   }
 
+  /** True when API/fallback URLs target this panel's MediaMTX path (e.g. live_rx, live_nai). */
+  private urlsMatchPlaybackPath(urls: PlaybackUrls): boolean {
+    const needle = `/${this.playbackPath}/`;
+    return urls.hls.includes(needle) && urls.webrtc_whep.includes(needle);
+  }
+
+  private buildPlaybackUrlsForHost(hlsSample: string): PlaybackUrls {
+    const p = new URL(hlsSample);
+    const scheme = p.protocol.replace(/:$/, "") || "http";
+    const hls = `${scheme}://${p.host}/${this.playbackPath}/index.m3u8`;
+    const whep = `${scheme}://${p.hostname}:8889/${this.playbackPath}/whep`;
+    return { hls, webrtc_whep: whep };
+  }
+
+  private buildFallbackPlaybackUrls(): PlaybackUrls | null {
+    const h = this.fallbackHlsUrl();
+    if (!h) return null;
+    return this.buildPlaybackUrlsForHost(h);
+  }
+
   private async resolvePlaybackUrls(): Promise<PlaybackUrls | null> {
     const base = this.api.baseUrl;
     const apiUrl = `${base}/api/plotter/playback`;
@@ -244,8 +264,20 @@ export class MediaPlayback {
       if (r.ok) {
         const j = (await r.json()) as { hls?: string; webrtc_whep?: string };
         if (j.hls && j.webrtc_whep) {
-          this.logPlayback("playback (from API)", j);
-          return { hls: j.hls, webrtc_whep: j.webrtc_whep };
+          const fromApi = { hls: j.hls, webrtc_whep: j.webrtc_whep };
+          if (this.urlsMatchPlaybackPath(fromApi)) {
+            this.logPlayback("playback (from API)", fromApi);
+            return fromApi;
+          }
+          this.logPlayback(
+            "playback API path mismatch for",
+            this.playbackPath,
+            "— using MediaMTX fallback URLs",
+            fromApi,
+          );
+          const corrected = this.buildPlaybackUrlsForHost(fromApi.hls);
+          this.logPlayback("playback (path-corrected from API host)", corrected);
+          return corrected;
         }
       }
       this.logPlayback("playback API missing fields or non-OK, using fallbacks");
@@ -255,13 +287,8 @@ export class MediaPlayback {
       this.setPlaybackStatus(`Cannot reach ${base} — trying fallback playback URLs`);
     }
 
-    const h = this.fallbackHlsUrl();
-    if (!h) return null;
-    const p = new URL(h);
-    const scheme = p.protocol.replace(/:$/, "") || "http";
-    const whep = `${scheme}://${p.hostname}:8889/${this.playbackPath}/whep`;
-    const fb = { hls: h, webrtc_whep: whep };
-    this.logPlayback("playback (fallback)", fb);
+    const fb = this.buildFallbackPlaybackUrls();
+    if (fb) this.logPlayback("playback (fallback)", fb);
     return fb;
   }
 

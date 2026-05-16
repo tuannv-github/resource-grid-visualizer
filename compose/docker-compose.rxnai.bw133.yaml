@@ -222,6 +222,9 @@ services:
       VITE_API_BASE_RX: ${VITE_API_BASE_RX:-http://localhost:8082}
       VITE_API_BASE_NAI: ${VITE_API_BASE_NAI:-http://localhost:8083}
       VITE_GUI_MODE: ${VITE_GUI_MODE:-rxnai}
+      # MediaMTX paths (must match mediamtx.rxnai.yml + backend MTX_RTSP_URL)
+      VITE_PLAYBACK_PATH_RX: ${VITE_PLAYBACK_PATH_RX:-live_rx}
+      VITE_PLAYBACK_PATH_NAI: ${VITE_PLAYBACK_PATH_NAI:-live_nai_yolo}
     ports:
       - "5173:5173"
     volumes:

@@ -46,7 +46,7 @@ const PUBLISHER_STATUS_POLL_MS = 1000;
 
 export type ResgridPanelOptions = {
   apiBase: string;
-  /** MediaMTX path segment for HLS/WHEP fallback (live, live_dl, live_ul). */
+  /** MediaMTX path segment for HLS/WHEP (live, live_dl, live_ul, live_rx, live_nai, …). */
   playbackPath: string;
   /** Distinct HTML **id** for this panel’s mode `<select>`. */
   modeSelectId: string;

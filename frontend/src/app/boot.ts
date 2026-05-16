@@ -99,7 +99,7 @@ export function bootApp(): void {
   console.info(
     "[resgrid] layout=%s panels=%s",
     cfg.layoutMode,
-    cfg.panels.map((p) => p.id).join(", "),
+    cfg.panels.map((p) => `${p.id}→${p.playbackPath}`).join(", "),
   );
 
   for (const spec of cfg.panels) {

@@ -111,13 +111,22 @@ function dualPanels(dl: string, ul: string): PanelBoot[] {
   ];
 }
 
+function rxNaiPlaybackPaths(): { rx: string; nai: string } {
+  const rx =
+    import.meta.env.VITE_PLAYBACK_PATH_RX?.trim() || "live_rx";
+  const nai =
+    import.meta.env.VITE_PLAYBACK_PATH_NAI?.trim() || "live_nai";
+  return { rx, nai };
+}
+
 function rxNaiPanels(rx: string, nai: string): PanelBoot[] {
+  const paths = rxNaiPlaybackPaths();
   return [
     {
       id: "panel-ul-media",
       controlsRootId: "panel-ul-controls",
       apiBase: rewriteLoopbackApiBaseToPageHost(rx),
-      playbackPath: "live_rx",
+      playbackPath: paths.rx,
       modeSelectId: "mode-select-ul",
       heading: "RX",
     },
@@ -125,7 +134,7 @@ function rxNaiPanels(rx: string, nai: string): PanelBoot[] {
       id: "panel-nai-media",
       controlsRootId: "panel-nai-controls",
       apiBase: rewriteLoopbackApiBaseToPageHost(nai),
-      playbackPath: "live_nai",
+      playbackPath: paths.nai,
       modeSelectId: "mode-select-nai",
       heading: "NAI",
     },
