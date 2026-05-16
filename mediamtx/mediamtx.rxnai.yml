@@ -21,6 +21,10 @@ pathDefaults:
   source: publisher
 
 # RX + NAI stack: backend-rx publishes live_rx, backend-nai publishes live_nai.
+# live_nai_yolo is published by the deepstream-yolov13 service
+# (yolo/docker-compose.yaml) which pulls live_nai, runs YOLOv13 inference,
+# and pushes the annotated stream back here.
 paths:
   live_rx:
   live_nai:
+  live_nai_yolo:
