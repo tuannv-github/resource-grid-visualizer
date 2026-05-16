@@ -211,12 +211,14 @@ int plotter_run_launch(const PlotterLaunchConfig& cfg) {
   if (cfg.enc_pol == EncodePolicy::Mean) pol_name = "mean";
   else if (cfg.enc_pol == EncodePolicy::FfmpegFilter) pol_name = "ffmpeg";
   fprintf(stderr,
-          "resgrid_plotter PRB=%d symbols=%d content=%dx%d cs=(%.4f,%.4f) square=%d letterbox=%d mq_resource_grid=%d "
+          "resgrid_plotter PRB=%d symbols=%d sym_window=[%d,%d] (%d cols) content=%dx%d cs=(%.4f,%.4f) square=%d "
+          "letterbox=%d mq_resource_grid=%d "
           "mq_fapi=%d internal_synth=%d fapi_slot_path=%d rg_slot_stream=%d raster_threads=%d -> %dx%d pipeline_fps=%d "
           "encoder_fps=%d "
           "encode_policy=%s "
           "video_codec=%s mag_scale=%g -> %s\n",
-          cfg.prb, cfg.sym, cfg.content_w, cfg.content_h, (double)cfg.cs_x, (double)cfg.cs_y, cfg.square_canvas ? 1 : 0,
+          cfg.prb, cfg.sym, cfg.sym_start, cfg.sym_start + cfg.sym_count - 1, cfg.sym_count, cfg.content_w,
+          cfg.content_h, (double)cfg.cs_x, (double)cfg.cs_y, cfg.square_canvas ? 1 : 0,
           (cfg.square_canvas && cfg.square_letterbox) ? 1 : 0, cfg.have_res ? 1 : 0, cfg.have_fapi ? 1 : 0,
           internal_q ? 1 : 0, slot_assembled_q ? 1 : 0, cfg.resource_grid_slot_stream ? 1 : 0, rt, cfg.frame_w,
           cfg.frame_h, cfg.fps, cfg.encoder_fps, pol_name, cfg.video_encoder_nvenc ? "nvenc" : "libx264",
@@ -244,8 +246,9 @@ int plotter_run_launch(const PlotterLaunchConfig& cfg) {
   RasterStage raster_stage;
   raster_stage.raster_configure(rt, rgba_bytes, internal_q.get(), full_grid_fifo_q.get(), slot_assembled_q.get(),
                                 iq_sidecar_q.get(), cfg.resource_grid_slot_stream, rgba_q.get(), fps_base, ncells,
-                                cfg.prb, cfg.sym, cfg.frame_w, cfg.frame_h, cfg.off_x, cfg.off_y, cfg.content_w,
-                                cfg.content_h, cfg.mag_scale, grid_mag, block_mag, grid2, block2, capturer_ptr);
+                                cfg.prb, cfg.sym, cfg.sym_start, cfg.sym_count, cfg.frame_w, cfg.frame_h, cfg.off_x,
+                                cfg.off_y, cfg.content_w, cfg.content_h, cfg.mag_scale, grid_mag, block_mag, grid2,
+                                block2, capturer_ptr);
   for (int i = 0; i < rt; ++i)
     raster_stage.raster_set_thread_cuda(i, d_z[(size_t)i], d_mag[(size_t)i], d_chan[(size_t)i], d_cell_rnti[(size_t)i],
                                  d_rgba[(size_t)i], (rt == 1) ? raster_cuda_stream : raster_streams[(size_t)i]);

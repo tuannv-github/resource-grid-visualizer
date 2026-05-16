@@ -72,10 +72,12 @@ __global__ void __launch_bounds__(256) magnitude_kernel(const float2* z, float* 
   if (i < n) mag[i] = hypotf(z[i].x, z[i].y);
 }
 
-/** Index-based upscaling: channel 0 → Viridis(mag); PHY ids 1…8 → flat tint from `cell_rnti` (RNTI jitter all PHY). */
+/** Index-based upscaling: channel 0 → Viridis(mag); PHY ids 1…8 → flat tint from `cell_rnti` (RNTI jitter all PHY).
+ *  `sym_start`/`sym_count` crop the data array along the symbol axis so only columns
+ *  `[sym_start, sym_start+sym_count-1]` of the full `sym`-wide grid are rasterized. */
 __global__ void rgba_frame_kernel(const float* mag, const uint8_t* chan, const uint32_t* cell_rnti, int prb, int sym,
-                                  int frame_w, int frame_h, int off_x, int off_y, int content_w, int content_h,
-                                  float mag_scale, uint8_t* rgba) {
+                                  int sym_start, int sym_count, int frame_w, int frame_h, int off_x, int off_y,
+                                  int content_w, int content_h, float mag_scale, uint8_t* rgba) {
   const int x = blockIdx.x * blockDim.x + threadIdx.x;
   const int y = blockIdx.y * blockDim.y + threadIdx.y;
   if (x >= frame_w || y >= frame_h) return;
@@ -87,7 +89,8 @@ __global__ void rgba_frame_kernel(const float* mag, const uint8_t* chan, const u
     rgba[o + 3] = 255;
     return;
   }
-  const int s = min(sym - 1, (lx * sym) / max(1, content_w));
+  const int vs = min(sym_count - 1, (lx * sym_count) / max(1, content_w));
+  const int s = min(sym - 1, sym_start + vs);
   /* PRB 0 at bottom of frame (screen y increases downward). */
   const int p = min(prb - 1, ((content_h - 1 - ly) * prb) / max(1, content_h));
   const int cell = s * prb + p;
@@ -192,15 +195,16 @@ static void chan_phy_name(uint8_t ch_id, char* buf, size_t buflen) {
   }
 }
 
-/** Inverse of `rgba_frame_kernel` cell indexing: symbol `s` spans `lx` in [`lx0`, `lx1`). */
-static int resgrid_cell_lx0(int s, int sym, int cw) {
-  if (s <= 0) return 0;
-  return (s * cw + sym - 1) / sym;
+/** Inverse of `rgba_frame_kernel` cell indexing for the *visible* symbol column index `vs`
+ *  (`vs == s - sym_start`); column `vs` spans `lx` in [`lx0`, `lx1`) within the cropped raster. */
+static int resgrid_cell_lx0(int vs, int sym_count, int cw) {
+  if (vs <= 0) return 0;
+  return (vs * cw + sym_count - 1) / sym_count;
 }
 
-static int resgrid_cell_lx1_excl(int s, int sym, int cw) {
-  if (s >= sym - 1) return cw;
-  return ((s + 1) * cw + sym - 1) / sym;
+static int resgrid_cell_lx1_excl(int vs, int sym_count, int cw) {
+  if (vs >= sym_count - 1) return cw;
+  return ((vs + 1) * cw + sym_count - 1) / sym_count;
 }
 
 /** PRB `p` spans `ly` in [`ly0`, `ly1`) in content pixels (PRB 0 at bottom; small `ly` = top). */
@@ -211,14 +215,17 @@ static void resgrid_cell_ly_range(int p, int prb, int ch, int* ly0, int* ly1_exc
   *ly1_excl = ch - u_lo;
 }
 
-/** True if `(s,p)` is not separated from `(ns,np)` by PHY type or RNTI (matches overlay flood-fill rules). */
+/** True if `(s,p)` is not separated from `(ns,np)` by PHY type or RNTI (matches overlay flood-fill rules).
+ *  Neighbors outside the visible symbol window `[sym_start, sym_start + sym_count)` are treated as a hard
+ *  border so cropped edges always paint a stroke (matches what the rasterizer actually draws). */
 static bool resgrid_phy_merges_with(const std::vector<uint8_t>& chan, const std::vector<uint32_t>& cell_rnti, int prb,
-                                   int sym, int s, int p, int ns, int np, bool show_rnti) {
+                                   int sym, int sym_start, int sym_count, int s, int p, int ns, int np,
+                                   bool show_rnti) {
   const size_t ia = (size_t)s * (size_t)prb + (size_t)p;
   const uint8_t ca = chan[ia];
   if (ca < 1u || ca > 8u) return true;
 
-  if (ns < 0 || ns >= sym || np < 0 || np >= prb) return false;
+  if (ns < sym_start || ns >= sym_start + sym_count || ns >= sym || np < 0 || np >= prb) return false;
   const size_t ib = (size_t)ns * (size_t)prb + (size_t)np;
   if (chan[ib] != ca) return false;
   if (show_rnti && cell_rnti[ia] != cell_rnti[ib]) return false;
@@ -250,14 +257,19 @@ static void resgrid_frame_vline_stroke(uint8_t* rgba, int fw, int fh, int x, int
   }
 }
 
-/** Draw 1-pixel borders between slot PHY regions (and vs magnitude background) using the same merge rule as labels. */
+/** Draw 1-pixel borders between slot PHY regions (and vs magnitude background) using the same merge rule as labels.
+ *  Iterates only the visible columns `[sym_start, sym_start + sym_count)` so cropping with
+ *  `--start-symbol` / `--stop-symbol` matches the rasterized image. */
 static void overlay_chan_region_borders_on_rgba(uint8_t* rgba, int fw, int fh, const std::vector<uint8_t>& chan,
-                                                const std::vector<uint32_t>& cell_rnti, int prb, int sym, int off_x,
-                                                int off_y, int content_w, int content_h) {
-  if (chan.size() != (size_t)prb * (size_t)sym || prb < 1 || sym < 1 || content_w < 1 || content_h < 1) return;
+                                                const std::vector<uint32_t>& cell_rnti, int prb, int sym,
+                                                int sym_start, int sym_count, int off_x, int off_y, int content_w,
+                                                int content_h) {
+  if (chan.size() != (size_t)prb * (size_t)sym || prb < 1 || sym < 1 || sym_count < 1 || content_w < 1 ||
+      content_h < 1)
+    return;
   const bool show_rnti = cell_rnti.size() == chan.size();
 
-  int stroke = content_w / (sym * 6);
+  int stroke = content_w / (sym_count * 6);
   if (stroke < 1) stroke = 1;
   if (stroke > 3) stroke = 3;
 
@@ -266,9 +278,11 @@ static void overlay_chan_region_borders_on_rgba(uint8_t* rgba, int fw, int fh, c
   const uint8_t bg = 12u;
   const uint8_t bb = 14u;
 
-  for (int s = 0; s < sym; ++s) {
-    const int lx0 = resgrid_cell_lx0(s, sym, content_w);
-    const int lx1 = resgrid_cell_lx1_excl(s, sym, content_w);
+  for (int vs = 0; vs < sym_count; ++vs) {
+    const int s = sym_start + vs;
+    if (s < 0 || s >= sym) continue;
+    const int lx0 = resgrid_cell_lx0(vs, sym_count, content_w);
+    const int lx1 = resgrid_cell_lx1_excl(vs, sym_count, content_w);
     for (int p = 0; p < prb; ++p) {
       const size_t idx = (size_t)s * (size_t)prb + (size_t)p;
       if (chan[idx] < 1u || chan[idx] > 8u) continue;
@@ -282,14 +296,14 @@ static void overlay_chan_region_borders_on_rgba(uint8_t* rgba, int fw, int fh, c
       const int fy0 = off_y + ly0;
       const int fy1 = off_y + ly1;
 
-      if (!resgrid_phy_merges_with(chan, cell_rnti, prb, sym, s, p, s - 1, p, show_rnti))
+      if (!resgrid_phy_merges_with(chan, cell_rnti, prb, sym, sym_start, sym_count, s, p, s - 1, p, show_rnti))
         resgrid_frame_vline_stroke(rgba, fw, fh, fx0, fy0, fy1, stroke, 1, br, bg, bb, alpha);
-      if (!resgrid_phy_merges_with(chan, cell_rnti, prb, sym, s, p, s + 1, p, show_rnti))
+      if (!resgrid_phy_merges_with(chan, cell_rnti, prb, sym, sym_start, sym_count, s, p, s + 1, p, show_rnti))
         resgrid_frame_vline_stroke(rgba, fw, fh, fx1 - 1, fy0, fy1, stroke, -1, br, bg, bb, alpha);
 
-      if (!resgrid_phy_merges_with(chan, cell_rnti, prb, sym, s, p, s, p + 1, show_rnti))
+      if (!resgrid_phy_merges_with(chan, cell_rnti, prb, sym, sym_start, sym_count, s, p, s, p + 1, show_rnti))
         resgrid_frame_hline_stroke(rgba, fw, fh, fx0, fx1, fy0, stroke, 1, br, bg, bb, alpha);
-      if (!resgrid_phy_merges_with(chan, cell_rnti, prb, sym, s, p, s, p - 1, show_rnti))
+      if (!resgrid_phy_merges_with(chan, cell_rnti, prb, sym, sym_start, sym_count, s, p, s, p - 1, show_rnti))
         resgrid_frame_hline_stroke(rgba, fw, fh, fx0, fx1, fy1 - 1, stroke, -1, br, bg, bb, alpha);
     }
   }
@@ -330,17 +344,22 @@ static void draw_centered_phy_rnti_label(uint8_t* rgba, int fw, int fh, int cx, 
 
 /** One label per 4-connected region of cells chan 1…8. When cell_rnti is populated, neighbors must also
  *  match RNTI so two regions with the same PHY id but different RNTIs (any of PDCCH/PDSCH/PUCCH/PUSCH/SRS/…) get
- *  separate centroid labels; CUDA uses the same per-cell RNTI for a subtle tint jitter on ids 1…8. */
+ *  separate centroid labels; CUDA uses the same per-cell RNTI for a subtle tint jitter on ids 1…8.
+ *  Flood fill is clipped to the visible symbol window `[sym_start, sym_start + sym_count)` so labels and
+ *  centroids reflect only the cropped raster. */
 static void overlay_chan_region_labels_on_rgba(uint8_t* rgba, int fw, int fh, const std::vector<uint8_t>& chan,
-                                              const std::vector<uint32_t>& cell_rnti, int prb, int sym, int off_x,
-                                              int off_y, int content_w, int content_h) {
-  if (chan.size() != (size_t)prb * (size_t)sym || prb < 1 || sym < 1 || content_w < 1 || content_h < 1) return;
+                                              const std::vector<uint32_t>& cell_rnti, int prb, int sym, int sym_start,
+                                              int sym_count, int off_x, int off_y, int content_w, int content_h) {
+  if (chan.size() != (size_t)prb * (size_t)sym || prb < 1 || sym < 1 || sym_count < 1 || content_w < 1 ||
+      content_h < 1)
+    return;
   const bool show_rnti = cell_rnti.size() == chan.size();
   const size_t n = (size_t)prb * (size_t)sym;
   std::vector<uint8_t> vis(n, 0);
   static const int d4[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+  const int sym_stop_excl = std::min(sym, sym_start + sym_count);
 
-  for (int s = 0; s < sym; ++s) {
+  for (int s = sym_start; s < sym_stop_excl; ++s) {
     for (int p = 0; p < prb; ++p) {
       const size_t idx = (size_t)s * (size_t)prb + (size_t)p;
       const uint8_t c0 = chan[idx];
@@ -351,7 +370,7 @@ static void overlay_chan_region_labels_on_rgba(uint8_t* rgba, int fw, int fh, co
       double sum_lx = 0.0;
       double sum_ly = 0.0;
       size_t ngeom = 0;
-      double sum_s = 0.0;
+      double sum_vs = 0.0;
       double sum_p = 0.0;
       size_t cnt = 0;
       std::vector<size_t> st;
@@ -363,12 +382,13 @@ static void overlay_chan_region_labels_on_rgba(uint8_t* rgba, int fw, int fh, co
         st.pop_back();
         const int us = (int)(u / (size_t)prb);
         const int up = (int)(u % (size_t)prb);
-        sum_s += (double)us;
+        const int uvs = us - sym_start;
+        sum_vs += (double)uvs;
         sum_p += (double)up;
         ++cnt;
 
-        const int lx0 = resgrid_cell_lx0(us, sym, content_w);
-        const int lx1 = resgrid_cell_lx1_excl(us, sym, content_w);
+        const int lx0 = resgrid_cell_lx0(uvs, sym_count, content_w);
+        const int lx1 = resgrid_cell_lx1_excl(uvs, sym_count, content_w);
         int cly0 = 0;
         int cly1 = 0;
         resgrid_cell_ly_range(up, prb, content_h, &cly0, &cly1);
@@ -381,7 +401,7 @@ static void overlay_chan_region_labels_on_rgba(uint8_t* rgba, int fw, int fh, co
         for (int di = 0; di < 4; ++di) {
           const int ns = us + d4[di][0];
           const int np = up + d4[di][1];
-          if (ns < 0 || ns >= sym || np < 0 || np >= prb) continue;
+          if (ns < sym_start || ns >= sym_stop_excl || np < 0 || np >= prb) continue;
           const size_t v = (size_t)ns * (size_t)prb + (size_t)np;
           if (vis[v] || chan[v] != c0) continue;
           if (show_rnti && cell_rnti[v] != r0) continue;
@@ -396,9 +416,9 @@ static void overlay_chan_region_labels_on_rgba(uint8_t* rgba, int fw, int fh, co
         lx = (float)(sum_lx / (double)ngeom);
         ly = (float)(sum_ly / (double)ngeom);
       } else if (cnt > 0) {
-        const float ms = (float)(sum_s / (double)cnt);
+        const float mvs = (float)(sum_vs / (double)cnt);
         const float mp = (float)(sum_p / (double)cnt);
-        lx = (ms + 0.5f) * (float)content_w / (float)sym;
+        lx = (mvs + 0.5f) * (float)content_w / (float)sym_count;
         ly = (float)content_h - (mp + 0.5f) * (float)content_h / (float)prb;
       } else {
         continue;
@@ -468,11 +488,13 @@ bool acquire_frame_for_interpolate(InternalFrameQueue* internal_q, FullGridFifoQ
   return false;
 }
 
-/** CUDA interpolate (mag + tint) → host RGBA + CPU overlays (encoder input buffer). */
+/** CUDA interpolate (mag + tint) → host RGBA + CPU overlays (encoder input buffer).
+ *  `sym_start` / `sym_count` crop the raster to the visible symbol window. */
 void render_frame_rgba(const GridFrame& gf, float2* d_z, float* d_mag, uint8_t* d_chan, uint32_t* d_cell_rnti,
-                              uint8_t* d_rgba, std::vector<uint8_t>& h_rgba, int ncells, int prb, int sym, int frame_w,
-                              int frame_h, int off_x, int off_y, int content_w, int content_h, float mag_scale,
-                              dim3 grid_mag, dim3 block_mag, dim3 grid2, dim3 block2, cudaStream_t stream) {
+                              uint8_t* d_rgba, std::vector<uint8_t>& h_rgba, int ncells, int prb, int sym,
+                              int sym_start, int sym_count, int frame_w, int frame_h, int off_x, int off_y,
+                              int content_w, int content_h, float mag_scale, dim3 grid_mag, dim3 block_mag,
+                              dim3 grid2, dim3 block2, cudaStream_t stream) {
   const cudaStream_t st = stream ? stream : (cudaStream_t)0;
   cuda_check(cudaMemcpyAsync(d_z, gf.iq.data(), ncells * sizeof(float2), cudaMemcpyHostToDevice, st), "H2D z");
   cuda_check(cudaMemcpyAsync(d_chan, gf.chan.data(), (size_t)ncells * sizeof(uint8_t), cudaMemcpyHostToDevice, st),
@@ -486,8 +508,8 @@ void render_frame_rgba(const GridFrame& gf, float2* d_z, float* d_mag, uint8_t* 
 
   magnitude_kernel<<<grid_mag, block_mag, 0, st>>>(d_z, d_mag, ncells);
   cuda_check(cudaGetLastError(), "magnitude_kernel");
-  rgba_frame_kernel<<<grid2, block2, 0, st>>>(d_mag, d_chan, d_cell_rnti, prb, sym, frame_w, frame_h, off_x, off_y,
-                                              content_w, content_h, mag_scale, d_rgba);
+  rgba_frame_kernel<<<grid2, block2, 0, st>>>(d_mag, d_chan, d_cell_rnti, prb, sym, sym_start, sym_count, frame_w,
+                                              frame_h, off_x, off_y, content_w, content_h, mag_scale, d_rgba);
   cuda_check(cudaGetLastError(), "rgba_frame_kernel");
   cuda_check(cudaMemcpyAsync(h_rgba.data(), d_rgba, h_rgba.size(), cudaMemcpyDeviceToHost, st), "D2H rgba");
   cuda_check(cudaStreamSynchronize(st), "raster cuda stream");
@@ -500,10 +522,10 @@ void render_frame_rgba(const GridFrame& gf, float2* d_z, float* d_mag, uint8_t* 
     }
   }
   if (any_chan_region) {
-    overlay_chan_region_borders_on_rgba(h_rgba.data(), frame_w, frame_h, gf.chan, gf.cell_rnti, prb, sym, off_x, off_y,
-                                       content_w, content_h);
-    overlay_chan_region_labels_on_rgba(h_rgba.data(), frame_w, frame_h, gf.chan, gf.cell_rnti, prb, sym, off_x, off_y,
-                                       content_w, content_h);
+    overlay_chan_region_borders_on_rgba(h_rgba.data(), frame_w, frame_h, gf.chan, gf.cell_rnti, prb, sym, sym_start,
+                                       sym_count, off_x, off_y, content_w, content_h);
+    overlay_chan_region_labels_on_rgba(h_rgba.data(), frame_w, frame_h, gf.chan, gf.cell_rnti, prb, sym, sym_start,
+                                       sym_count, off_x, off_y, content_w, content_h);
   }
 }
 
@@ -558,9 +580,10 @@ void fill_synthetic_iq(std::vector<float2>& out, std::vector<uint8_t>& chan, std
 void RasterStage::raster_configure(int rt, size_t rgba_bytes, InternalFrameQueue* internal_q,
                                    FullGridFifoQueue* full_grid_q, AssembledSlotQueue* assembled_q,
                                    GridFrameQueue* sidecar_q, bool resource_grid_slot_stream, RgbaFrameQueue* rgba_out,
-                                   void* fps_base, int ncells, int prb, int sym, int frame_w, int frame_h, int off_x,
-                                   int off_y, int content_w, int content_h, float mag_scale, dim3 grid_mag,
-                                   dim3 block_mag, dim3 grid2, dim3 block2, CapturerStage* capturer) {
+                                   void* fps_base, int ncells, int prb, int sym, int sym_start, int sym_count,
+                                   int frame_w, int frame_h, int off_x, int off_y, int content_w, int content_h,
+                                   float mag_scale, dim3 grid_mag, dim3 block_mag, dim3 grid2, dim3 block2,
+                                   CapturerStage* capturer) {
   rt_ = rt;
   rgba_bytes_ = rgba_bytes;
   merger_rgba_out_ = rgba_out;
@@ -588,6 +611,8 @@ void RasterStage::raster_configure(int rt, size_t rgba_bytes, InternalFrameQueue
     rc.ncells = ncells;
     rc.prb = prb;
     rc.sym = sym;
+    rc.sym_start = sym_start;
+    rc.sym_count = sym_count;
     rc.frame_w = frame_w;
     rc.frame_h = frame_h;
     rc.off_x = off_x;
@@ -648,8 +673,9 @@ void RasterStage::single_thread_main() {
     bool did_render = false;
     if (got) {
       render_frame_rgba(gf, ctx.d_z, ctx.d_mag, ctx.d_chan, ctx.d_cell_rnti, ctx.d_rgba, packet, ctx.ncells, ctx.prb,
-                        ctx.sym, ctx.frame_w, ctx.frame_h, ctx.off_x, ctx.off_y, ctx.content_w, ctx.content_h,
-                        ctx.mag_scale, ctx.grid_mag, ctx.block_mag, ctx.grid2, ctx.block2, ctx.cuda_stream);
+                        ctx.sym, ctx.sym_start, ctx.sym_count, ctx.frame_w, ctx.frame_h, ctx.off_x, ctx.off_y,
+                        ctx.content_w, ctx.content_h, ctx.mag_scale, ctx.grid_mag, ctx.block_mag, ctx.grid2,
+                        ctx.block2, ctx.cuda_stream);
       g_stage_output_count_raster.fetch_add(1, std::memory_order_relaxed);
       produced_any = true;
       did_render = true;
@@ -755,16 +781,18 @@ void RasterStage::worker_main(int thread_index) {
       continue;
     }
     render_frame_rgba(item.gf, ctx.d_z, ctx.d_mag, ctx.d_chan, ctx.d_cell_rnti, ctx.d_rgba, packet, ctx.ncells, ctx.prb,
-                      ctx.sym, ctx.frame_w, ctx.frame_h, ctx.off_x, ctx.off_y, ctx.content_w, ctx.content_h,
-                      ctx.mag_scale, ctx.grid_mag, ctx.block_mag, ctx.grid2, ctx.block2, ctx.cuda_stream);
+                      ctx.sym, ctx.sym_start, ctx.sym_count, ctx.frame_w, ctx.frame_h, ctx.off_x, ctx.off_y,
+                      ctx.content_w, ctx.content_h, ctx.mag_scale, ctx.grid_mag, ctx.block_mag, ctx.grid2, ctx.block2,
+                      ctx.cuda_stream);
     pool_submit_rgba(item.seq, std::move(packet));
     packet.resize(rgba_bytes_);
   }
   RasterWorkItem drain;
   while (work_q_->try_pop(drain)) {
     render_frame_rgba(drain.gf, ctx.d_z, ctx.d_mag, ctx.d_chan, ctx.d_cell_rnti, ctx.d_rgba, packet, ctx.ncells, ctx.prb,
-                      ctx.sym, ctx.frame_w, ctx.frame_h, ctx.off_x, ctx.off_y, ctx.content_w, ctx.content_h,
-                      ctx.mag_scale, ctx.grid_mag, ctx.block_mag, ctx.grid2, ctx.block2, ctx.cuda_stream);
+                      ctx.sym, ctx.sym_start, ctx.sym_count, ctx.frame_w, ctx.frame_h, ctx.off_x, ctx.off_y,
+                      ctx.content_w, ctx.content_h, ctx.mag_scale, ctx.grid_mag, ctx.block_mag, ctx.grid2, ctx.block2,
+                      ctx.cuda_stream);
     pool_submit_rgba(drain.seq, std::move(packet));
     packet.resize(rgba_bytes_);
   }

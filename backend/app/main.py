@@ -61,6 +61,12 @@ CUDA_IQ_CELL_PIXELS = _env("CUDA_IQ_CELL_PIXELS", "6")
 CUDA_IQ_PRESET = _env("CUDA_IQ_PRESET", NVENC_PRESET)
 CUDA_IQ_PRB = _env("CUDA_IQ_PRB", "273")
 CUDA_IQ_SYMBOLS = _env("CUDA_IQ_SYMBOLS", "14")
+# **START_SYMBOL** / **STOP_SYMBOL**: inclusive 0-based OFDM-symbol index range to render in the heatmap
+# (the producer still publishes the full slot; only the visualization is cropped horizontally).
+# Empty / unset → full slot ([0, CUDA_IQ_SYMBOLS-1]); passed to ``resgrid_plotter`` as ``--start-symbol`` /
+# ``--stop-symbol`` only when the user overrides the default.
+START_SYMBOL = _env("START_SYMBOL", "").strip()
+STOP_SYMBOL = _env("STOP_SYMBOL", "").strip()
 CUDA_IQ_MAG_SCALE = _env("CUDA_IQ_MAG_SCALE", "1.0")
 CUDA_IQ_QUEUE_DEPTH = _env("CUDA_IQ_QUEUE_DEPTH", "32")
 CUDA_IQ_RASTER_THREADS = _env("CUDA_IQ_RASTER_THREADS", "16")
@@ -104,7 +110,10 @@ def _plotter_padded_rgba_size() -> tuple[int, int]:
         cell = max(1, int(str(CUDA_IQ_CELL_PIXELS).strip()))
     except ValueError:
         prb, sym, cell = 273, 14, 6
-    side = max(prb * cell, sym * cell)
+    # Visible symbol count: matches plotter raster width when ``START_SYMBOL`` / ``STOP_SYMBOL`` shrink the slot.
+    sym_start, sym_stop = _plotter_symbol_window()
+    sym_visible = max(1, sym_stop - sym_start + 1) if (sym_start or sym_stop != max(0, sym - 1)) else sym
+    side = max(prb * cell, sym_visible * cell)
     if side % 2:
         side += 1
     fw = fh = side
@@ -162,6 +171,49 @@ def _plotter_resource_grid_dims() -> tuple[int, int]:
     return max(1, p), max(1, s)
 
 
+def _plotter_symbol_window() -> tuple[int, int]:
+    """Inclusive ``(start, stop)`` symbol indices the plotter should render (clamped to ``[0, sym-1]``).
+
+    Empty / invalid env values fall back to the full slot ``(0, sym - 1)``. Out-of-range or inverted ranges
+    log a warning and snap back to the full slot so the plotter never aborts on env-only misconfiguration.
+    """
+    _prb, sym = _plotter_resource_grid_dims()
+    sym_max = max(0, sym - 1)
+
+    def _parse(raw: str, fallback: int) -> int:
+        if not raw:
+            return fallback
+        try:
+            return int(raw)
+        except ValueError:
+            return fallback
+
+    start_raw = str(START_SYMBOL).strip()
+    stop_raw = str(STOP_SYMBOL).strip()
+    if not start_raw and not stop_raw:
+        return 0, sym_max
+    start = _parse(start_raw, 0)
+    stop = _parse(stop_raw, sym_max)
+    if start < 0 or stop < 0 or stop < start or start > sym_max or stop > sym_max:
+        _log.warning(
+            "Invalid START_SYMBOL=%r / STOP_SYMBOL=%r (sym=%d); rendering full slot.",
+            START_SYMBOL,
+            STOP_SYMBOL,
+            sym,
+        )
+        return 0, sym_max
+    return start, stop
+
+
+def _plotter_symbol_window_cli_args() -> list[str]:
+    """``--start-symbol`` / ``--stop-symbol`` argv for ``resgrid_plotter`` (omitted when full slot is selected)."""
+    _prb, sym = _plotter_resource_grid_dims()
+    start, stop = _plotter_symbol_window()
+    if start == 0 and stop == max(0, sym - 1):
+        return []
+    return ["--start-symbol", str(start), "--stop-symbol", str(stop)]
+
+
 def _encoder_hz_for_slot_interval(*, encoder_hz_override: Optional[float] = None) -> float:
     if encoder_hz_override is not None:
         return max(1.0, float(encoder_hz_override))
@@ -211,6 +263,8 @@ def _plotter_spawn_env_for_log() -> dict[str, str]:
         "CUDA_IQ_PRESET",
         "CUDA_IQ_PRB",
         "CUDA_IQ_SYMBOLS",
+        "START_SYMBOL",
+        "STOP_SYMBOL",
         "CUDA_IQ_MAG_SCALE",
         "CUDA_IQ_QUEUE_DEPTH",
         "CUDA_IQ_RASTER_THREADS",
@@ -582,6 +636,20 @@ class PlotterStatus(BaseModel):
     mtx_path: str = Field(description="MediaMTX path name for this stream.")
     iq_prb: int = Field(description="PRB dimension (CUDA_IQ_PRB).")
     iq_symbols: int = Field(description="Symbol dimension (CUDA_IQ_SYMBOLS).")
+    iq_symbol_start: int = Field(
+        default=0,
+        description=(
+            "Inclusive 0-based start symbol rendered by the plotter "
+            "(**START_SYMBOL**; defaults to 0 = full slot)."
+        ),
+    )
+    iq_symbol_stop: int = Field(
+        default=0,
+        description=(
+            "Inclusive 0-based stop symbol rendered by the plotter "
+            "(**STOP_SYMBOL**; defaults to **iq_symbols - 1** = full slot)."
+        ),
+    )
     iq_producer_fps: Optional[float] = None
     iq_plotter_fps: Optional[float] = None
     iq_producer_command_fps: Optional[float] = None
@@ -2203,6 +2271,7 @@ def start_plotter_and_generators(
                 "--raster-threads",
                 (CUDA_IQ_RASTER_THREADS or "16").strip() or "16",
             ]
+            cmd.extend(_plotter_symbol_window_cli_args())
             _append_plotter_input_mq_and_cuda_shm(
                 cmd,
                 cuda_shm_name=cuda_shm_name,
@@ -2970,6 +3039,7 @@ def api_plotter_status(request: Request):
         cap_jt = int(jt)
     peer = request.client.host if request.client else "-"
     grid_prb, grid_symbols = _plotter_resource_grid_dims()
+    sym_start, sym_stop = _plotter_symbol_window()
     _log.info(
         "GET /api/plotter/status client=%s generating=%s process_mode=%s",
         peer,
@@ -2986,6 +3056,8 @@ def api_plotter_status(request: Request):
         mtx_path=_mtx_path,
         iq_prb=grid_prb,
         iq_symbols=grid_symbols,
+        iq_symbol_start=sym_start,
+        iq_symbol_stop=sym_stop,
         iq_producer_fps=plotter_shm_prod_hz,
         iq_plotter_fps=plotter_shm_rast_hz,
         iq_producer_command_fps=plotter_shm_cmd_hz,

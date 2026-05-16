@@ -26,6 +26,16 @@ export type PublisherStatus = {
   mtx_path: string;
   iq_prb?: number;
   iq_symbols?: number;
+  /**
+   * Inclusive 0-based first OFDM-symbol index the plotter renders
+   * (**START_SYMBOL** env / **--start-symbol** CLI). Defaults to **0** = full slot.
+   */
+  iq_symbol_start?: number;
+  /**
+   * Inclusive 0-based last OFDM-symbol index the plotter renders
+   * (**STOP_SYMBOL** env / **--stop-symbol** CLI). Defaults to **iq_symbols - 1** = full slot.
+   */
+  iq_symbol_stop?: number;
   iq_producer_fps?: number | null;
   iq_plotter_fps?: number | null;
   iq_producer_command_fps?: number | null;

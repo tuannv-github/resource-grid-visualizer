@@ -18,6 +18,10 @@ struct PlotterLaunchConfig {
   std::string preset = "p4";
   int prb = 273;
   int sym = 14;
+  /** Inclusive 0-based ``--start-symbol`` (default 0). */
+  int sym_start = 0;
+  /** Number of OFDM symbols actually rendered (``--stop-symbol - --start-symbol + 1``; defaults to ``sym``). */
+  int sym_count = 14;
   int fps = 200;
   int encoder_fps = 24;
   int qdepth = 32;

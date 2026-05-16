@@ -43,9 +43,10 @@ class RasterStage {
  public:
   void raster_configure(int rt, size_t rgba_bytes, InternalFrameQueue* internal_q, FullGridFifoQueue* full_grid_q,
                         AssembledSlotQueue* assembled_q, GridFrameQueue* sidecar_q, bool resource_grid_slot_stream,
-                        RgbaFrameQueue* rgba_out, void* fps_base, int ncells, int prb, int sym, int frame_w, int frame_h,
-                        int off_x, int off_y, int content_w, int content_h, float mag_scale, dim3 grid_mag,
-                        dim3 block_mag, dim3 grid2, dim3 block2, CapturerStage* capturer);
+                        RgbaFrameQueue* rgba_out, void* fps_base, int ncells, int prb, int sym, int sym_start,
+                        int sym_count, int frame_w, int frame_h, int off_x, int off_y, int content_w, int content_h,
+                        float mag_scale, dim3 grid_mag, dim3 block_mag, dim3 grid2, dim3 block2,
+                        CapturerStage* capturer);
 
   void raster_set_thread_cuda(int index, float2* d_z, float* d_mag, uint8_t* d_chan, uint32_t* d_cell_rnti,
                               uint8_t* d_rgba, cudaStream_t cuda_stream);
@@ -71,6 +72,8 @@ class RasterStage {
     int ncells = 0;
     int prb = 0;
     int sym = 0;
+    int sym_start = 0;
+    int sym_count = 0;
     int frame_w = 0;
     int frame_h = 0;
     int off_x = 0;

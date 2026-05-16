@@ -399,7 +399,15 @@ export class ResgridPanel {
     this.btnGeneratorStart.disabled = !generatorModeKnown || anyGenRunning;
     this.btnGeneratorStop.disabled = !generatorModeKnown || !anyGenRunning;
 
-    renderIqAxes(this.mediaRoot, s.iq_prb ?? 273, s.iq_symbols ?? 14, heatmapRelevant);
+    const totalSym = s.iq_symbols ?? 14;
+    renderIqAxes(
+      this.mediaRoot,
+      s.iq_prb ?? 273,
+      totalSym,
+      heatmapRelevant,
+      s.iq_symbol_start ?? 0,
+      s.iq_symbol_stop ?? Math.max(0, totalSym - 1),
+    );
 
     const legendSec = queryRole<HTMLElement>(this.mediaRoot, "iq-legend-section");
     if (legendSec) legendSec.hidden = !(uiIqGenerator || serverProcessIq);

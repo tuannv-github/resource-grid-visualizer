@@ -56,11 +56,16 @@ static constexpr const char kDefaultMqFapiPath[] = "/resgrid_slot";
 
 static void usage(const char* av0) {
   fprintf(stderr,
-          "Usage: %s [--rtsp URL] [--prb N] [--symbols M] [--cell-pixels P] [--fps F] [--encoder-fps E] [--mag-scale S] "
+          "Usage: %s [--rtsp URL] [--prb N] [--symbols M] [--start-symbol S0] [--stop-symbol S1] [--cell-pixels P] "
+          "[--fps F] [--encoder-fps E] [--mag-scale S] "
           "[--preset p4] [--video-encoder nvenc|cpu] [--queue-depth D] [--raster-threads N] [--encode-policy POL] "
           "[--no-square] [--square-letterbox] "
           "[--mq-images [NAME]] [--mq-resource-grid [NAME]] [--mq-resource-grid-mode full|slot] [--mq-fapi [NAME]] "
           "[--cuda-shm NAME] [--capturer-dir DIR]\n"
+          "  --start-symbol S0  Inclusive 0-based first OFDM symbol to render (default 0).\n"
+          "  --stop-symbol S1   Inclusive 0-based last OFDM symbol to render (default --symbols-1).\n"
+          "                     Combine to crop the raster horizontally to columns [S0, S1]; producers\n"
+          "                     still publish the full slot, only the visualization is narrowed.\n"
           "  --fps F            Pipeline / internal synthetic producer default (Hz); default 200. Also sets --encoder-fps\n"
           "                     if you omit --encoder-fps (backward compatible single-knob).\n"
           "  --encoder-fps E    Target NVENC output rate (Hz); default 24. With --encode-policy last|mean, rawvideo -r\n"
@@ -97,6 +102,8 @@ int main(int argc, char** argv) {
   std::string rtsp = "rtsp://127.0.0.1:8554/live";
   int prb = 273;
   int sym = 14;
+  int sym_start_cli = -1;
+  int sym_stop_cli = -1;
   int cell_px = 6;
   int fps = 200;
   int encoder_fps = 24;
@@ -124,6 +131,10 @@ int main(int argc, char** argv) {
       prb = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--symbols") && i + 1 < argc)
       sym = atoi(argv[++i]);
+    else if (!strcmp(argv[i], "--start-symbol") && i + 1 < argc)
+      sym_start_cli = atoi(argv[++i]);
+    else if (!strcmp(argv[i], "--stop-symbol") && i + 1 < argc)
+      sym_stop_cli = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--cell-pixels") && i + 1 < argc)
       cell_px = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--fps") && i + 1 < argc) {
@@ -207,6 +218,27 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  /* Symbol render window (inclusive). Unset → full slot; out-of-range / inverted → clamp + warn so a
+   * misconfigured env still produces a usable raster. */
+  int sym_disp_start = (sym_start_cli >= 0) ? sym_start_cli : 0;
+  int sym_disp_stop = (sym_stop_cli >= 0) ? sym_stop_cli : (sym - 1);
+  if (sym_disp_start < 0 || sym_disp_start >= sym) {
+    fprintf(stderr, "%s: warning: --start-symbol %d out of range [0,%d]; using 0\n", argv[0], sym_disp_start, sym - 1);
+    sym_disp_start = 0;
+  }
+  if (sym_disp_stop < 0 || sym_disp_stop >= sym) {
+    fprintf(stderr, "%s: warning: --stop-symbol %d out of range [0,%d]; using %d\n", argv[0], sym_disp_stop, sym - 1,
+            sym - 1);
+    sym_disp_stop = sym - 1;
+  }
+  if (sym_disp_stop < sym_disp_start) {
+    fprintf(stderr, "%s: warning: --stop-symbol %d < --start-symbol %d; rendering full slot\n", argv[0],
+            sym_disp_stop, sym_disp_start);
+    sym_disp_start = 0;
+    sym_disp_stop = sym - 1;
+  }
+  const int sym_disp_count = sym_disp_stop - sym_disp_start + 1;
+
   const bool have_fapi = !mq_fapi.empty();
   const bool have_res = !mq_resource_grid.empty();
   if (!str_ieq(mq_resource_grid_mode.c_str(), "full") && !str_ieq(mq_resource_grid_mode.c_str(), "slot")) {
@@ -233,13 +265,15 @@ int main(int argc, char** argv) {
   float cs_x;
   float cs_y;
 
+  /* Canvas geometry uses the *visible* symbol count so cropping with --start-symbol/--stop-symbol
+   * narrows the raster horizontally instead of leaving black margins. */
   if (square_canvas) {
-    int side = std::max(prb * cell_px, sym * cell_px);
+    int side = std::max(prb * cell_px, sym_disp_count * cell_px);
     if (side % 2) ++side;
     frame_w = frame_h = side;
     if (square_letterbox) {
-      const float cell_scale = (float)side / (float)std::max(prb, sym);
-      content_w = (int)lrintf((float)sym * cell_scale);
+      const float cell_scale = (float)side / (float)std::max(prb, sym_disp_count);
+      content_w = (int)lrintf((float)sym_disp_count * cell_scale);
       content_h = (int)lrintf((float)prb * cell_scale);
       off_x = (frame_w - content_w) / 2;
       off_y = (frame_h - content_h) / 2;
@@ -247,12 +281,12 @@ int main(int argc, char** argv) {
     } else {
       off_x = off_y = 0;
       content_w = content_h = side;
-      cs_x = (float)side / (float)sym;
+      cs_x = (float)side / (float)sym_disp_count;
       cs_y = (float)side / (float)prb;
     }
   } else {
     cs_x = cs_y = (float)cell_px;
-    content_w = sym * cell_px;
+    content_w = sym_disp_count * cell_px;
     content_h = prb * cell_px;
     frame_w = content_w + (content_w & 1);
     frame_h = content_h + (content_h & 1);
@@ -298,6 +332,8 @@ int main(int argc, char** argv) {
   lc.preset = preset;
   lc.prb = prb;
   lc.sym = sym;
+  lc.sym_start = sym_disp_start;
+  lc.sym_count = sym_disp_count;
   lc.fps = fps;
   lc.encoder_fps = encoder_fps;
   lc.qdepth = qdepth;

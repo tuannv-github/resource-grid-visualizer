@@ -120,6 +120,7 @@ If **`--mq-fapi`** is in use, or standalone **`--mq-resource-grid-mode slot`**, 
 |------|-------|
 | `--rtsp URL` | Default `rtsp://127.0.0.1:8554/live`. |
 | `--prb`, `--symbols`, `--cell-pixels` | Grid geometry and cell size in pixels. |
+| `--start-symbol`, `--stop-symbol` | Inclusive 0-based OFDM-symbol window to render (default: full slot `[0, --symbols-1]`). Producers still publish the full slot; only the visualization is cropped horizontally to columns `[start, stop]`. Backend wires `START_SYMBOL` / `STOP_SYMBOL` env. |
 | `--fps` | Producer / pacing hint; upstream writers and **`--encoder-fps`** dominate cadence. |
 | `--encoder-fps` | Paced output for `last` / `mean` (hard-capped at 50 in code). |
 | `--queue-depth` | In-process queue depth (env `CUDA_IQ_QUEUE_DEPTH` in the app). |

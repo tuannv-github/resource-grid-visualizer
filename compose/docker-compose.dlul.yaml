@@ -51,6 +51,8 @@ services:
       CUDA_IQ_PRESET: ${CUDA_IQ_PRESET:-p4}
       CUDA_IQ_PRB: ${CUDA_IQ_PRB:-273}
       CUDA_IQ_SYMBOLS: ${CUDA_IQ_SYMBOLS:-14}
+      START_SYMBOL: ${START_SYMBOL:-0}
+      STOP_SYMBOL: ${STOP_SYMBOL:-13}
       CUDA_IQ_MQ_PATH: ${CUDA_IQ_MQ_PATH_DL:-/resgrid_iq_dl}
       CUDA_IQ_GEN_FPS: ${CUDA_IQ_GEN_FPS:-200}
       CUDA_SLOT_MQ_PATH: ${CUDA_SLOT_MQ_PATH_DL:-/resgrid_slot_dl}
@@ -132,6 +134,8 @@ services:
       CUDA_IQ_PRESET: ${CUDA_IQ_PRESET:-p4}
       CUDA_IQ_PRB: ${CUDA_IQ_PRB:-273}
       CUDA_IQ_SYMBOLS: ${CUDA_IQ_SYMBOLS:-14}
+      START_SYMBOL: ${START_SYMBOL:-0}
+      STOP_SYMBOL: ${STOP_SYMBOL:-13}
       CUDA_IQ_MQ_PATH: ${CUDA_IQ_MQ_PATH_UL:-/resgrid_iq_ul}
       CUDA_IQ_GEN_FPS: ${CUDA_IQ_GEN_FPS:-200}
       CUDA_SLOT_MQ_PATH: ${CUDA_SLOT_MQ_PATH_UL:-/resgrid_slot_ul}
