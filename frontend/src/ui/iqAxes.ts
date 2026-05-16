@@ -34,6 +34,12 @@ export function renderIqAxes(
   const clampedStart = Math.min(Math.max(0, rawStart), fullLastIdx);
   const clampedStop = Math.min(Math.max(clampedStart, rawStop), fullLastIdx);
   const visibleCount = Math.max(1, clampedStop - clampedStart + 1);
+  /* Cropped means the plotter rendered a sub-window of the slot (e.g. START_SYMBOL=2 / STOP_SYMBOL=11).
+   * In that case the simple "0..N-1" symbol ticks no longer align with the raster columns, so hide the
+   * symbol axis chrome (top label, bottom ticks, top-left corner) — PRB ticks on the left stay because
+   * they still map 1:1 to the cropped image rows. */
+  const cropped = clampedStart !== 0 || clampedStop !== fullLastIdx;
+  videoAxes.dataset.iqSymbolAxisCropped = cropped ? "true" : "false";
 
   prbCol.replaceChildren();
   for (const v of axisTickValues(prbMax, 7)) {
@@ -42,11 +48,17 @@ export function renderIqAxes(
     prbCol.appendChild(span);
   }
   symFoot.replaceChildren();
+  if (cropped) {
+    /* Still set aria-label so screen readers describe the cropped window even though the ticks are
+     * visually hidden — keeps the axis discoverable for assistive tech / debugging. */
+    symFoot.setAttribute(
+      "aria-label",
+      `Symbol axis hidden; plotter is rendering symbols ${clampedStart}–${clampedStop} of ${fullLastIdx + 1} per slot`,
+    );
+    return;
+  }
   symFoot.style.gridTemplateColumns = `repeat(${visibleCount}, minmax(0, 1fr))`;
-  symFoot.setAttribute(
-    "aria-label",
-    `Symbol index ${clampedStart} through ${clampedStop} (of ${fullLastIdx + 1} per slot)`,
-  );
+  symFoot.setAttribute("aria-label", `Symbol index 0 through ${fullLastIdx}`);
   for (let i = 0; i < visibleCount; i++) {
     const span = document.createElement("span");
     span.textContent = String(clampedStart + i);

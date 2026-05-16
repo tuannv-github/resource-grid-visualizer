@@ -54,6 +54,47 @@ body:has(.rg-media-card [data-role="video-axes"][data-iq-visible="true"]) .rg-ap
   white-space: nowrap;
 }
 
+/* Pushes everything after it (e.g. the sidebar toggle) to the toolbar's far right edge. */
+.rg-app__toolbar-spacer {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rg-app__sidebar-toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.6rem;
+  font: inherit;
+  font-size: 0.82rem;
+  color: #e8eaed;
+  background: #1c2230;
+  border: 1px solid #2d333d;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.rg-app__sidebar-toggle:hover,
+.rg-app__sidebar-toggle:focus-visible {
+  background: #232b3a;
+  border-color: #3a4254;
+  outline: none;
+}
+
+.rg-app__sidebar-toggle-icon {
+  display: inline-block;
+  font-weight: 700;
+  color: #8ab4f8;
+  transition: transform 0.15s ease;
+}
+
+/* aria-pressed="true" means the sidebar is currently HIDDEN — flip the chevron to point inward. */
+.rg-app__sidebar-toggle[aria-pressed="true"] .rg-app__sidebar-toggle-icon {
+  transform: rotate(180deg);
+}
+
 .rg-dashboard {
   flex: 1 1 0;
   min-height: 0;
@@ -64,6 +105,18 @@ body:has(.rg-media-card [data-role="video-axes"][data-iq-visible="true"]) .rg-ap
   padding: var(--rg-stack-gap) var(--rg-edge) 0.55rem;
   box-sizing: border-box;
   overflow: hidden;
+}
+
+/* Sidebar hidden by the toolbar toggle: collapse the dashboard to a single media column.
+ * `display: none` on the aside lets the auto-fit grid drop the empty track, and #app width
+ * relaxes so the media stack fills the freed space (including on the 960px mobile breakpoint). */
+.rg-app--sidebar-hidden .rg-dashboard {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.rg-app--sidebar-hidden .rg-dashboard__side {
+  display: none !important;
 }
 
 /* Sizing context for tall vs wide auto-layout of #rg-media-stack */
@@ -558,6 +611,16 @@ body:has(.rg-media-card [data-role="video-axes"][data-iq-visible="true"]) .rg-ap
   display: none;
 }
 
+/* Cropped symbol window (plotter START_SYMBOL / STOP_SYMBOL not the full slot): drop the symbol-axis
+ * rows so the cropped raster doesn't carry misleading "0..N-1" tick labels. PRB ticks on the left
+ * stay (they still map 1:1 to image rows); aria-label on `.va-axis-bottom` keeps the window
+ * announced for assistive tech. */
+.video-axes[data-iq-visible="true"][data-iq-symbol-axis-cropped="true"] .va-corner,
+.video-axes[data-iq-visible="true"][data-iq-symbol-axis-cropped="true"] .va-axis-top,
+.video-axes[data-iq-visible="true"][data-iq-symbol-axis-cropped="true"] .va-axis-bottom {
+  display: none;
+}
+
 /* PRB caption sits under the tick column (row 3). */
 .video-axes[data-iq-visible="true"] .va-spacer {
   display: flex;
@@ -804,6 +867,11 @@ body:has(.rg-media-card [data-role="video-axes"][data-iq-visible="true"]) .rg-ap
   .rg-dashboard {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(0, 1fr) minmax(0, 42vh);
+  }
+
+  /* Sidebar hidden: drop the second row so the media stack fills the viewport. */
+  .rg-app--sidebar-hidden .rg-dashboard {
+    grid-template-rows: minmax(0, 1fr);
   }
 
   .rg-dashboard__side {

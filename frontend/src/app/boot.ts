@@ -1,6 +1,7 @@
 import { isPlaybackDebugEnabled } from "../config/debug";
 import { resolvePanels, type ResolvedGuiLayout } from "../config/panelLayout";
 import { ResgridPanel } from "../panel/ResgridPanel";
+import { mountSidebarToggle } from "../ui/sidebarToggle";
 
 const livePanels: ResgridPanel[] = [];
 
@@ -91,6 +92,9 @@ export function bootApp(): void {
 
   applyLayoutRootClasses(app, cfg);
   syncDomToLayout(cfg);
+  /* Mount before panels: applies persisted `rg-app--sidebar-hidden` synchronously so the dashboard
+   * grid mounts in its final shape (no flash of full sidebar on reload). */
+  mountSidebarToggle(app);
 
   console.info(
     "[resgrid] layout=%s panels=%s",

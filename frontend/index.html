@@ -10,6 +10,18 @@
     <div id="app" class="rg-app">
       <header class="rg-app__toolbar">
         <h1 class="rg-app__title">Resource grid — live</h1>
+        <span class="rg-app__toolbar-spacer" aria-hidden="true"></span>
+        <button
+          type="button"
+          data-role="btn-sidebar-toggle"
+          class="rg-app__sidebar-toggle"
+          aria-controls="rg-sidebar"
+          aria-pressed="false"
+          title="Hide / show the Plotter &amp; Generator side panel"
+        >
+          <span class="rg-app__sidebar-toggle-icon" aria-hidden="true">»</span>
+          <span class="rg-app__sidebar-toggle-label" data-role="btn-sidebar-toggle-label">Hide sidebar</span>
+        </button>
       </header>
 
       <div class="rg-dashboard">
@@ -97,7 +109,7 @@
         </div>
         </div>
 
-        <aside class="rg-dashboard__side" aria-label="Plotter &amp; Generator objects">
+        <aside id="rg-sidebar" class="rg-dashboard__side" aria-label="Plotter &amp; Generator objects">
           <section id="panel-dl-controls" class="rg-stream-box" aria-labelledby="dl-stream-heading">
             <header class="rg-stream-box__head rg-panel-headrow">
               <h2 id="dl-stream-heading" class="rg-panel-heading">Downlink</h2>
