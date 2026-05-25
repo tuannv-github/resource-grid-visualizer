@@ -2,7 +2,7 @@
 
 CUDA pipeline that turns I/Q resource grids (or raw RGBA) into **H.264** and pushes **RTSP** via a child **FFmpeg** process (`h264_nvenc` by default, or `libx264` with `--video-encoder cpu`).
 
-**Deployment stance (this repo):** drive video from **POSIX message queues** — **`--mq-images`** (raw RGBA), **`--mq-resource-grid`** (full-grid / sidecar I/Q), and **`--mq-fapi`** (slot messages). Queue names must start with **`/`** (e.g. `/resgrid_rgba`). The FastAPI backend creates each queue (see `backend/app/main.py` + `backend/app/resgrid_posix_mq.py`), spawns **resgrid_plotter** with the **`--mq-*`** flags, and starts **generator.py** with the same **`--mq-*`** spellings.
+**Deployment stance (this repo):** drive video from **POSIX message queues** — **`--mq-images`** (raw RGBA), **`--mq-resource-grid`** (full-grid / sidecar I/Q), and **`--mq-fapi`** (slot messages). Queue names must start with **`/`** (e.g. `/images`). The FastAPI backend creates each queue (see `backend/app/main.py` + `backend/app/resgrid_posix_mq.py`), spawns **resgrid_plotter** with the **`--mq-*`** flags, and starts **generator.py** with the same **`--mq-*`** spellings.
 
 ### Chunked wire format (all three mq inputs)
 
@@ -28,9 +28,9 @@ Payload follows the header in the same mq message. The reader reassembles chunks
 
 | CLI flag | Default mq name | Typical backend env |
 |----------|-----------------|---------------------|
-| **`--mq-images`** | `/resgrid_rgba` | `RESGRID_MQ_IMAGES` |
-| **`--mq-resource-grid`** | `/resgrid_iq` | `CUDA_IQ_MQ_PATH` |
-| **`--mq-fapi`** | `/resgrid_slot` | `CUDA_SLOT_MQ_PATH` |
+| **`--mq-images`** | `/images` | `RESGRID_MQ_IMAGES` |
+| **`--mq-resource-grid`** | `/resource_grid` | `CUDA_IQ_MQ_PATH` |
+| **`--mq-fapi`** | `/fapi` | `CUDA_SLOT_MQ_PATH` |
 
 **FastAPI IQ spawn** passes **`--mq-images`**, **`--mq-resource-grid`**, and **`--mq-fapi`** (names from env). **`--mq-images` alone** (no IQ queues) selects the encoder-only fast path. For bare **`resgrid_plotter`**, any non-empty subset of the three argv groups is valid.
 
@@ -51,9 +51,9 @@ Payload follows the header in the same mq message. The reader reassembles chunks
 flowchart TB
   subgraph inp [Input]
     direction LR
-    MQIMG["--mq-images<br/>/resgrid_rgba"]
-    MQRG["--mq-resource-grid<br/>/resgrid_iq"]
-    MQFAPI["--mq-fapi<br/>/resgrid_slot"]
+    MQIMG["--mq-images<br/>/images"]
+    MQRG["--mq-resource-grid<br/>/resource_grid"]
+    MQFAPI["--mq-fapi<br/>/fapi"]
   end
 
   FGQ["FullGridFifoQueue"]
@@ -99,9 +99,9 @@ docker build -t resgrid-plotter .
 
 | Flag | Injects into | Notes |
 |------|----------------|-------|
-| **`--mq-images`** | FFmpeg stdin path | Raw RGBA logical frames (chunked mq). Optional **`NAME`**; default **`/resgrid_rgba`**. Encoder-only when sole IQ input. |
-| **`--mq-resource-grid`** | Full-grid / sidecar stream → **`FullGridFifoQueue`** | Optional **`NAME`**; default **`/resgrid_iq`**. **`--mq-resource-grid-mode`**: `full` or `slot` (standalone). With **`--mq-fapi`**: sidecar full-grid. |
-| **`--mq-fapi`** | Slot assembler | Default **`/resgrid_slot`**. |
+| **`--mq-images`** | FFmpeg stdin path | Raw RGBA logical frames (chunked mq). Optional **`NAME`**; default **`/images`**. Encoder-only when sole IQ input. |
+| **`--mq-resource-grid`** | Full-grid / sidecar stream → **`FullGridFifoQueue`** | Optional **`NAME`**; default **`/resource_grid`**. **`--mq-resource-grid-mode`**: `full` or `slot` (standalone). With **`--mq-fapi`**: sidecar full-grid. |
+| **`--mq-fapi`** | Slot assembler | Default **`/fapi`**. |
 | *(no IQ mq flags)* | Internal synthetic (legacy) | Unsupported for FastAPI IQ video. |
 
 ### Encoder pacing (sparse slot timelines)

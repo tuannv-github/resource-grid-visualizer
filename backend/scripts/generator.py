@@ -73,9 +73,9 @@ _IQ_PATTERN_MAX = 3
 # Must match ``kResourceGridSlotIqMagic`` in ``backend/plotter/include/plotter_common.cuh``.
 RESOURCE_GRID_SLOT_IQ_MAGIC = 0x52474953
 # Default POSIX mq names (match ``app.main`` / ``resgrid_plotter`` defaults).
-_DEFAULT_FAPI_MQ_PATH = (os.environ.get("CUDA_SLOT_MQ_PATH") or "").strip() or "/resgrid_slot"
-_DEFAULT_RESOURCE_GRID_MQ_PATH = (os.environ.get("CUDA_IQ_MQ_PATH") or "").strip() or "/resgrid_iq"
-_DEFAULT_IMAGES_MQ_PATH = (os.environ.get("RESGRID_MQ_IMAGES") or "").strip() or "/resgrid_rgba"
+_DEFAULT_FAPI_MQ_PATH = (os.environ.get("CUDA_SLOT_MQ_PATH") or "").strip() or "/fapi"
+_DEFAULT_RESOURCE_GRID_MQ_PATH = (os.environ.get("CUDA_IQ_MQ_PATH") or "").strip() or "/resource_grid"
+_DEFAULT_IMAGES_MQ_PATH = (os.environ.get("RESGRID_MQ_IMAGES") or "").strip() or "/images"
 
 
 def _int_env(name: str, fallback: int) -> int:

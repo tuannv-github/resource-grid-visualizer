@@ -1,4 +1,4 @@
-# Full-grid I/Q POSIX message queue (`/resgrid_iq` default)
+# Full-grid I/Q POSIX message queue (`/resource_grid` default)
 
 This note describes the **logical payload** (one full-grid I/Q raster) consumed by **`resgrid_plotter`** via **`--mq-resource-grid`** and how it is carried over **POSIX message queues**. The canonical integrator guide is **[`docs/CHANNEL_BASED_INTERFACE.md`](../../docs/CHANNEL_BASED_INTERFACE.md)** (especially §2–§3); this file is a compact plotter-side summary.
 
@@ -6,7 +6,7 @@ This note describes the **logical payload** (one full-grid I/Q raster) consumed 
 
 ## 1. What it is (not TCP)
 
-- Transport is a **POSIX message queue**: a kernel object addressed by a **name** starting with **`/`** (default **`/resgrid_iq`**, env **`CUDA_IQ_MQ_PATH`** on the FastAPI stack).
+- Transport is a **POSIX message queue**: a kernel object addressed by a **name** starting with **`/`** (default **`/resource_grid`**, env **`CUDA_IQ_MQ_PATH`** on the FastAPI stack).
 - **Logical framing**: each **logical frame** (one complete grid blob, same byte layout as §3) may be split into **multiple** `mq_send` messages. Every mq message is **chunk header + chunk payload**; the header magic is **`0x52474D43`** (`RGMC`). **Version 1** uses a **24-byte** header; **version 2** extends it to **28 bytes** with **`prb`** and **`symbols`** (`uint16` each) describing the full-grid shape when applicable (RGB / slot producers may leave them **0**). The reader **`ResgridMqStreamIn`** accepts v1 and v2, reassembles chunks into a **byte stream**, then performs **`read_exact`** in **`frame_bytes`** multiples—so producer semantics match the old “one record per frame” model at the **payload** level. See **`readme.md`** § “Chunked wire format” and **`include/plotter_posix_mq.cuh`** / **`src/plotter_posix_mq.cpp`**.
 - **Producer-side helpers**: Python **`backend/app/resgrid_posix_mq.py`** (`ResgridMqWriter`) and **`generator.py`** use the same chunking as the C++ **`resgrid_mq_send_frame`** path.
 - **Queue limits**: align **`RESGRID_MQ_MSGSIZE`** / **`RESGRID_MQ_MAXMSG`** with **`/proc/sys/fs/mqueue/*`** so chunks are not truncated; defaults follow **`effective_msgsize_cap()`** in **`plotter_posix_mq.cpp`**.
@@ -57,7 +57,7 @@ Cells are packed in **increasing `flat_index`** order:
 frame_bytes = ncells × 8 = symbols × prb × 2 × sizeof(float)
 ```
 
-There is **no** metadata plane in this stream (no `chan` / RNTI here). Channel coloring, if needed, comes from the **slot / FAPI** mq path (**`/resgrid_slot`** default, **`--mq-fapi`**) in channel-based modes; see **[`CHANNEL_BASED_INTERFACE.md`](../../docs/CHANNEL_BASED_INTERFACE.md)**.
+There is **no** metadata plane in this stream (no `chan` / RNTI here). Channel coloring, if needed, comes from the **slot / FAPI** mq path (**`/fapi`** default, **`--mq-fapi`**) in channel-based modes; see **[`CHANNEL_BASED_INTERFACE.md`](../../docs/CHANNEL_BASED_INTERFACE.md)**.
 
 ---
 
@@ -85,4 +85,4 @@ There is **no** metadata plane in this stream (no `chan` / RNTI here). Channel c
 | [`docs/CUPHY_UL_RESGRID_FIFO.md`](../../docs/CUPHY_UL_RESGRID_FIFO.md) | cuPHY PUSCH `DataRx` export variables (POSIX mq; legacy doc filename) |
 | [`readme.md`](readme.md) | Plotter pipeline, **`--mq-*`** argv groups, chunked header |
 
-**Note:** This file is named `readme.resouce_grid.md` (historic spelling). The default **POSIX mq** name is **`/resgrid_iq`**, controlled by **`CUDA_IQ_MQ_PATH`**.
+**Note:** This file is named `readme.resouce_grid.md` (historic spelling). The default **POSIX mq** name is **`/resource_grid`**, controlled by **`CUDA_IQ_MQ_PATH`**.

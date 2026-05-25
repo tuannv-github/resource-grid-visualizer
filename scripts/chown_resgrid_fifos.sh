@@ -4,8 +4,7 @@
 set -euo pipefail
 
 owner="${UID:-1000}:${GID:-1000}"
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-dir="${1:-$here/host-tmp}"
+dir="${1:-/tmp}"
 
 if [[ ! -d "$dir" ]]; then
   echo "Directory not found: $dir" >&2

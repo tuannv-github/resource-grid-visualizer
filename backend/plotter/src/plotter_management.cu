@@ -48,11 +48,11 @@ void plotter_warn_queue_drop_oldest(PlotterQueueDropKind kind, const char* queue
 }
 
 /** Default POSIX mq name for raw RGBA (matches ``RESGRID_MQ_IMAGES`` default in FastAPI ``main.py``). */
-static constexpr const char kDefaultMqImagesPath[] = "/resgrid_rgba";
+static constexpr const char kDefaultMqImagesPath[] = "/images";
 /** Default full-grid I/Q mq (matches ``CUDA_IQ_MQ_PATH`` default in ``main.py``). */
-static constexpr const char kDefaultMqResourceGridPath[] = "/resgrid_iq";
+static constexpr const char kDefaultMqResourceGridPath[] = "/resource_grid";
 /** Default slot / FAPI mq (matches ``CUDA_SLOT_MQ_PATH`` default in ``main.py``). */
-static constexpr const char kDefaultMqFapiPath[] = "/resgrid_slot";
+static constexpr const char kDefaultMqFapiPath[] = "/fapi";
 
 static void usage(const char* av0) {
   fprintf(stderr,

@@ -9,7 +9,7 @@
 #
 # Set MTX_WEBRTC_ADDITIONAL_HOSTS in compose/.env to this machine's LAN IP (as browsers reach it).
 #
-# POSIX mq: /resgrid_rx (RX), /resgrid_nai (NAI NI grid from cuBB). `ipc: host` on backends + cuBB.
+# POSIX mq: /resource_grid_rx (RX), /resource_grid_nai (NAI NI grid from cuBB). `ipc: host` on backends + cuBB.
 # cuPHY: CUPHY_RX_MQ_ENABLE + CUPHY_RX_MQ_PATH; CUPHY_NAI_MQ_ENABLE + CUPHY_NAI_MQ_PATH.
 # Match CUPHY_RESGRID_PRB = 133 (or CUDA_IQ_PRB).
 
@@ -62,11 +62,11 @@ services:
       CUDA_IQ_SYMBOLS: ${CUDA_IQ_SYMBOLS:-14}
       START_SYMBOL: ${START_SYMBOL:-0}
       STOP_SYMBOL: ${STOP_SYMBOL:-11}
-      CUPHY_RX_MQ_PATH: ${CUPHY_RX_MQ_PATH:-/resgrid_rx}
-      CUDA_IQ_MQ_PATH: ${CUPHY_RX_MQ_PATH:-/resgrid_rx}
+      CUPHY_RX_MQ_PATH: ${CUPHY_RX_MQ_PATH:-/resource_grid_rx}
+      CUDA_IQ_MQ_PATH: ${CUPHY_RX_MQ_PATH:-/resource_grid_rx}
       CUDA_IQ_GEN_FPS: ${CUDA_IQ_GEN_FPS:-200}
-      CUDA_SLOT_MQ_PATH: ${CUDA_SLOT_MQ_PATH_RX:-/resgrid_rx_slot}
-      RESGRID_MQ_IMAGES: ${RESGRID_MQ_IMAGES_RX:-/resgrid_rx_rgba}
+      CUDA_SLOT_MQ_PATH: ${CUDA_SLOT_MQ_PATH_RX:-/fapi_rx}
+      RESGRID_MQ_IMAGES: ${RESGRID_MQ_IMAGES_RX:-/images_rx}
       RESGRID_CAPTURER_DIR: ${RESGRID_CAPTURER_DIR_RX:-/encoder-snaps-rx}
       MTX_PUBLIC_HTTP_BASE: ${MTX_PUBLIC_HTTP_BASE:-http://localhost:8888}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
@@ -83,7 +83,7 @@ services:
     ports:
       - "8082:8081"
     volumes:
-      - ${RESGRID_HOST_TMP:-../host-tmp}:/tmp
+      - ${RESGRID_HOST_TMP:-/tmp}:/tmp
       - ${RESGRID_HOST_CAPTURER_SNAPS_RX:-../encoder-snaps-rx}:/encoder-snaps
       - ../backend/app:/app/app
       - ../backend/scripts:/app/scripts
@@ -154,11 +154,11 @@ services:
       CUDA_IQ_SYMBOLS: ${CUDA_IQ_SYMBOLS:-14}
       START_SYMBOL: ${START_SYMBOL:-0}
       STOP_SYMBOL: ${STOP_SYMBOL:-11}
-      CUPHY_NAI_MQ_PATH: ${CUPHY_NAI_MQ_PATH:-/resgrid_nai}
-      CUDA_IQ_MQ_PATH: ${CUPHY_NAI_MQ_PATH:-/resgrid_nai}
+      CUPHY_NAI_MQ_PATH: ${CUPHY_NAI_MQ_PATH:-/resource_grid_nai}
+      CUDA_IQ_MQ_PATH: ${CUPHY_NAI_MQ_PATH:-/resource_grid_nai}
       CUDA_IQ_GEN_FPS: ${CUDA_IQ_GEN_FPS:-200}
-      CUDA_SLOT_MQ_PATH: ${CUDA_SLOT_MQ_PATH_NAI:-/resgrid_nai_slot}
-      RESGRID_MQ_IMAGES: ${RESGRID_MQ_IMAGES_NAI:-/resgrid_nai_rgba}
+      CUDA_SLOT_MQ_PATH: ${CUDA_SLOT_MQ_PATH_NAI:-/fapi_nai}
+      RESGRID_MQ_IMAGES: ${RESGRID_MQ_IMAGES_NAI:-/images_nai}
       RESGRID_CAPTURER_DIR: ${RESGRID_CAPTURER_DIR_NAI:-/encoder-snaps-nai}
       MTX_PUBLIC_HTTP_BASE: ${MTX_PUBLIC_HTTP_BASE:-http://localhost:8888}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
@@ -175,7 +175,7 @@ services:
     ports:
       - "8083:8081"
     volumes:
-      - ${RESGRID_HOST_TMP:-../host-tmp}:/tmp
+      - ${RESGRID_HOST_TMP:-/tmp}:/tmp
       - ${RESGRID_HOST_CAPTURER_SNAPS_NAI:-../encoder-snaps-nai}:/encoder-snaps
       - ../backend/app:/app/app
       - ../backend/scripts:/app/scripts

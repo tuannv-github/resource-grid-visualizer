@@ -74,7 +74,7 @@ CUDA_IQ_RASTER_THREADS = _env("CUDA_IQ_RASTER_THREADS", "16")
 CUDA_AUTO_START_IQ_GENERATOR = _env("CUDA_AUTO_START_IQ_GENERATOR", "0") == "1"
 # **--mq-resource-grid** + **--mq-fapi** + **--mq-images** are always part of **resgrid_plotter** argv (POSIX mq names).
 # Default POSIX mq for full-grid / sidecar I/Q (matches **resgrid_plotter** ``kDefaultMqResourceGridPath``).
-_DEFAULT_CUDA_IQ_MQ_PATH = "/resgrid_iq"
+_DEFAULT_CUDA_IQ_MQ_PATH = "/resource_grid"
 # Compose sets CUDA_IQ_MQ_PATH per backend; fall back to CUPHY_RX_MQ_PATH or CUPHY_NAI_MQ_PATH.
 CUDA_IQ_MQ_PATH = _env_first(
     "CUDA_IQ_MQ_PATH",
@@ -83,10 +83,10 @@ CUDA_IQ_MQ_PATH = _env_first(
     default=_DEFAULT_CUDA_IQ_MQ_PATH,
 )
 # Default slot / FAPI mq (matches **resgrid_plotter** ``kDefaultMqFapiPath``).
-_DEFAULT_CUDA_SLOT_MQ_PATH = "/resgrid_slot"
+_DEFAULT_CUDA_SLOT_MQ_PATH = "/fapi"
 CUDA_SLOT_MQ_PATH = _env("CUDA_SLOT_MQ_PATH", _DEFAULT_CUDA_SLOT_MQ_PATH)
 # Raw RGBA mq for **resgrid_plotter** ``--mq-images`` (names must start with ``/``).
-_DEFAULT_RESGRID_MQ_IMAGES = "/resgrid_rgba"
+_DEFAULT_RESGRID_MQ_IMAGES = "/images"
 RESGRID_MQ_IMAGES = _env("RESGRID_MQ_IMAGES", _DEFAULT_RESGRID_MQ_IMAGES)
 CUDA_IQ_GEN_FPS = _env("CUDA_IQ_GEN_FPS", "200")
 # Seconds between demo slot records, or "fps"/"sync" (default) → 1/CUDA_IQ_FPS to match plotter frame rate (mode 3).

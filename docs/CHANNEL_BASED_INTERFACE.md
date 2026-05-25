@@ -31,15 +31,15 @@ Integrators sometimes confuse **kernel POSIX message queue names** (strings star
 
 | Stream | Environment variable | Default name |
 |--------|---------------------|--------------|
-| Full-grid I/Q | **`CUDA_IQ_MQ_PATH`** | **`/resgrid_iq`** |
-| Slot allocation messages | **`CUDA_SLOT_MQ_PATH`** | **`/resgrid_slot`** |
-| Raw RGBA video (`--mq-images`) | **`RESGRID_MQ_IMAGES`** | **`/resgrid_rgba`** |
+| Full-grid I/Q | **`CUDA_IQ_MQ_PATH`** | **`/resource_grid`** |
+| Slot allocation messages | **`CUDA_SLOT_MQ_PATH`** | **`/fapi`** |
+| Raw RGBA video (`--mq-images`) | **`RESGRID_MQ_IMAGES`** | **`/images`** |
 
 These are passed to **`resgrid_plotter`** as **`--mq-resource-grid`**, **`--mq-fapi`**, and **`--mq-images`** respectively. **`generator.py`** uses the same **`--mq-*`** flags.
 
 **Deployment note:** Message queues live in the **kernel mqueue namespace** for the container (or host); bind-mounting **`/tmp`** does **not** by itself define mq visibility across hosts.
 
-**Docker `ipc: host` (compose `backend` services):** This repo sets **`ipc: host`** on **`backend`** so **host processes** (e.g. cuPHY/cuBB running **on the Linux host**, not in Docker) share the same POSIX mq namespace as **`resgrid_plotter`**. If your PHY / cuBB runs **inside another Docker container**, that container **still does not** share IPC with the host unless you give it **`ipc: host`** as well (or **`ipc: "service:<backend>"`** so it joins the backend’s IPC namespace). Otherwise **`mq_open("/resgrid_iq", O_WRONLY)`** in the PHY container attaches to a **different** queue than the plotter’s reader.
+**Docker `ipc: host` (compose `backend` services):** This repo sets **`ipc: host`** on **`backend`** so **host processes** (e.g. cuPHY/cuBB running **on the Linux host**, not in Docker) share the same POSIX mq namespace as **`resgrid_plotter`**. If your PHY / cuBB runs **inside another Docker container**, that container **still does not** share IPC with the host unless you give it **`ipc: host`** as well (or **`ipc: "service:<backend>"`** so it joins the backend’s IPC namespace). Otherwise **`mq_open("/resource_grid", O_WRONLY)`** in the PHY container attaches to a **different** queue than the plotter’s reader.
 
 **Do not run two stacks** with the same default **`/resgrid_*`** names on one host while both use **`ipc: host`**: **`mq_create_queue`** calls **`mq_unlink`** and can tear down the other stack’s queues. Use distinct **`CUDA_IQ_MQ_PATH`** (and slot/RGBA names) per deployment.
 

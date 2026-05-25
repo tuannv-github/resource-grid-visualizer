@@ -199,7 +199,8 @@ def _mq_create_err(name: str) -> OSError:
         (
             f"Cannot create POSIX mq {name!r} (errno EMFILE; /dev/mqueue entries≈{n_mq}, "
             f"RLIMIT_NOFILE soft={nofile_soft} hard={nofile_hard}).{mq_hint} "
-            "When cuBB/plotters are stopped, prune stale names: ls /dev/mqueue; mq_unlink unused resgrid_*."
+            "When cuBB/plotters are stopped, prune stale names: ls /dev/mqueue; "
+            "mq_unlink unused resource_grid_*, fapi_*, images_*, and legacy resgrid_*."
         ),
     )
 
