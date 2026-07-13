@@ -104,8 +104,8 @@ services:
     ports:
       - "8081:8081"
     volumes:
-      # Host /tmp → container /tmp. Match the OAI gNB mount used by nws/docker-compose.open5gs.5slices.yaml.
-      # (nws/docker-compose.oai*.yaml) may use CUDA_IQ_MQ_PATH_DL/UL to match dlul backends when applicable.
+      # Host /tmp → container /tmp. Match the OAI gNB mount used by nws/docker-compose/docker-compose.open5gs.5slices*.yaml.
+      # (nws/docker-compose/docker-compose.oai*.yaml) may use CUDA_IQ_MQ_PATH_DL/UL to match dlul backends when applicable.
       - ${RESGRID_HOST_TMP:-/tmp}:/tmp
       - ${RESGRID_HOST_CAPTURER_SNAPS:-../encoder-snaps}:/encoder-snaps
       - ../backend/app:/app/app
