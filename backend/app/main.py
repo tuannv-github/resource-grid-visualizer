@@ -61,6 +61,9 @@ CUDA_IQ_CELL_PIXELS = _env("CUDA_IQ_CELL_PIXELS", "6")
 CUDA_IQ_PRESET = _env("CUDA_IQ_PRESET", NVENC_PRESET)
 CUDA_IQ_PRB = _env("CUDA_IQ_PRB", "273")
 CUDA_IQ_SYMBOLS = _env("CUDA_IQ_SYMBOLS", "14")
+# Filled from the first ZeroMQ resource-grid header when the plotter starts. Env values are only the fallback.
+_detected_iq_prb: Optional[int] = None
+_detected_iq_symbols: Optional[int] = None
 # **START_SYMBOL** / **STOP_SYMBOL**: inclusive 0-based OFDM-symbol index range to render in the heatmap
 # (the producer still publishes the full slot; only the visualization is cropped horizontally).
 # Empty / unset → full slot ([0, CUDA_IQ_SYMBOLS-1]); passed to ``resgrid_plotter`` as ``--start-symbol`` /
@@ -72,11 +75,14 @@ CUDA_IQ_QUEUE_DEPTH = _env("CUDA_IQ_QUEUE_DEPTH", "32")
 CUDA_IQ_RASTER_THREADS = _env("CUDA_IQ_RASTER_THREADS", "16")
 # When 1, auto-spawn **generator.py** after the plotter starts. Default 0: use **POST /api/generator/start** with **`feed`**.
 CUDA_AUTO_START_IQ_GENERATOR = _env("CUDA_AUTO_START_IQ_GENERATOR", "0") == "1"
-# **--mq-resource-grid** + **--mq-fapi** + **--mq-images** are always part of **resgrid_plotter** argv (POSIX mq names).
+# **--mq-resource-grid** is a full ZeroMQ address (ipc:// or tcp://) or a legacy POSIX mq name.
 # Default POSIX mq for full-grid / sidecar I/Q (matches **resgrid_plotter** ``kDefaultMqResourceGridPath``).
 _DEFAULT_CUDA_IQ_MQ_PATH = "/resource_grid"
-# Compose sets CUDA_IQ_MQ_PATH per backend; fall back to CUPHY_RX_MQ_PATH or CUPHY_NAI_MQ_PATH.
+# Prefer a full ZeroMQ bind address (ipc:// or tcp://). POSIX /resource_grid remains the fallback.
 CUDA_IQ_MQ_PATH = _env_first(
+    "CUDA_IQ_ZMQ_BIND",
+    "CUPHY_NAI_ZMQ_BIND",
+    "CUPHY_RX_ZMQ_BIND",
     "CUDA_IQ_MQ_PATH",
     "CUPHY_RX_MQ_PATH",
     "CUPHY_NAI_MQ_PATH",
@@ -102,11 +108,66 @@ CUDA_SLOT_RNTI_SEED = _env("CUDA_SLOT_RNTI_SEED", "").strip()
 IQ_FIFO_PRODUCER_LOG_LEVEL = _env("IQ_FIFO_PRODUCER_LOG_LEVEL", "").strip().upper()
 
 
+def _zmq_connect_endpoint(bind: str) -> str:
+    if bind.startswith("tcp://*:"):
+        return "tcp://127.0.0.1:" + bind[len("tcp://*:") :]
+    if bind.startswith("tcp://0.0.0.0:"):
+        return "tcp://127.0.0.1:" + bind[len("tcp://0.0.0.0:") :]
+    return bind
+
+
+def _peek_zmq_grid_dims(endpoint: str, timeout_ms: int = 5000) -> Optional[tuple[int, int]]:
+    """Read one resource-grid header (``prb=`` / ``symbols=``) and drop the IQ body."""
+    try:
+        import zmq
+    except ImportError:
+        _log.warning("pyzmq is not installed; grid size stays at CUDA_IQ_PRB / CUDA_IQ_SYMBOLS")
+        return None
+    ctx = zmq.Context()
+    sock = ctx.socket(zmq.SUB)
+    try:
+        sock.setsockopt(zmq.LINGER, 0)
+        sock.setsockopt(zmq.RCVTIMEO, timeout_ms)
+        sock.setsockopt(zmq.SUBSCRIBE, b"")
+        sock.connect(_zmq_connect_endpoint(endpoint))
+        header = sock.recv()
+        if not sock.getsockopt(zmq.RCVMORE):
+            return None
+        sock.recv()
+        text = header.decode("utf-8", "replace")
+        fields: dict[str, str] = {}
+        for tok in text.split():
+            if "=" in tok:
+                key, val = tok.split("=", 1)
+                fields[key] = val
+        prb = int(fields["prb"])
+        symbols = int(fields["symbols"])
+        if prb < 1 or symbols < 1:
+            return None
+        return prb, symbols
+    except Exception:
+        _log.warning("no ZeroMQ resource-grid header on %s within %sms", endpoint, timeout_ms)
+        return None
+    finally:
+        sock.close(linger=0)
+        ctx.term()
+
+
+def _refresh_grid_dims_from_zmq(endpoint: str) -> None:
+    global _detected_iq_prb, _detected_iq_symbols
+    if not endpoint.startswith(("ipc://", "tcp://", "inproc://")):
+        return
+    got = _peek_zmq_grid_dims(endpoint)
+    if got is None:
+        return
+    _detected_iq_prb, _detected_iq_symbols = got
+    _log.info("grid size from ZeroMQ header prb=%s symbols=%s endpoint=%s", got[0], got[1], endpoint)
+
+
 def _plotter_padded_rgba_size() -> tuple[int, int]:
     """Match ``resgrid_plotter`` square canvas + NVENC min side + 16-align (no letterbox), for ``--mq-images`` frame size."""
     try:
-        prb = max(1, int(str(CUDA_IQ_PRB).strip()))
-        sym = max(1, int(str(CUDA_IQ_SYMBOLS).strip()))
+        prb, sym = _plotter_resource_grid_dims()
         cell = max(1, int(str(CUDA_IQ_CELL_PIXELS).strip()))
     except ValueError:
         prb, sym, cell = 273, 14, 6
@@ -160,6 +221,8 @@ _synthetic_pattern_override: Optional[int] = None
 
 
 def _plotter_resource_grid_dims() -> tuple[int, int]:
+    if _detected_iq_prb is not None and _detected_iq_symbols is not None:
+        return max(1, _detected_iq_prb), max(1, _detected_iq_symbols)
     try:
         p = int(str(CUDA_IQ_PRB).strip())
     except ValueError:
@@ -446,9 +509,21 @@ def _mq_cleanup_optional(name: str) -> None:
         pass
 
 
+def _is_zmq_bind(path: str) -> bool:
+    return path.startswith(("ipc://", "tcp://", "inproc://"))
+
+
 def _prepare_plotter_posix_mq_unlocked(*, iq_path: str, slot_path: str, rgba_path: str) -> None:
+    if _is_zmq_bind(iq_path):
+        pass
+    elif not iq_path.startswith("/"):
+        raise RuntimeError(
+            "CUDA_IQ_ZMQ_BIND must be ipc:// or tcp://, or a POSIX mq name starting with / "
+            f"(got {iq_path!r})."
+        )
+    else:
+        mq_create_queue(iq_path)
     for label, p in (
-        ("CUDA_IQ_MQ_PATH", iq_path),
         ("CUDA_SLOT_MQ_PATH", slot_path),
         ("RESGRID_MQ_IMAGES", rgba_path),
     ):
@@ -456,7 +531,6 @@ def _prepare_plotter_posix_mq_unlocked(*, iq_path: str, slot_path: str, rgba_pat
             raise RuntimeError(
                 f"{label} must be a POSIX mq name starting with / (got {p!r})."
             )
-    mq_create_queue(iq_path)
     mq_create_queue(slot_path)
     mq_create_queue(rgba_path)
 
@@ -2233,6 +2307,8 @@ def start_plotter_and_generators(
 
             enc_i = _coerce_plotter_encoder_fps_cmd(plotter_encoder_fps)
             pipe_arg = str(CUDA_IQ_GEN_FPS).strip() or "200"
+            _refresh_grid_dims_from_zmq(fifo_path)
+            grid_prb, grid_symbols = _plotter_resource_grid_dims()
 
             pat_init = None
             cuda_shm_name, producer_shm_name = _plotter_shm_pair_create_unlocked(
@@ -2261,9 +2337,9 @@ def start_plotter_and_generators(
                 "--video-encoder",
                 "nvenc" if effective_video_encoder() == "nvenc" else "cpu",
                 "--prb",
-                CUDA_IQ_PRB,
+                str(grid_prb),
                 "--symbols",
-                CUDA_IQ_SYMBOLS,
+                str(grid_symbols),
                 "--mag-scale",
                 CUDA_IQ_MAG_SCALE,
                 "--queue-depth",

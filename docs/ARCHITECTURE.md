@@ -209,16 +209,7 @@ See **`.env.example`** for the full list and comments.
 ## Configuration reference
 
 - **Stack & dev workflow:** `compose/docker-compose.yml` (also `docker compose -f compose/docker-compose.yml watch`).
-- **Compose variants (PRB default for `CUDA_IQ_PRB` when unset):**
-  | File | Default `CUDA_IQ_PRB` | Notes |
-  |------|------------------------|--------|
-  | `compose/docker-compose.yml` | **273** | Single backend, path **`live`**. |
-  | `compose/docker-compose.bw133.yml` | **133** | Same stack; smaller IQ grid / OAI alignment. |
-  | `compose/docker-compose.bw106.yml` | **106** | Same stack; **106** PRB. |
-  | `compose/docker-compose.dlul.yaml` | **273** per backend | Two APIs **8081** / **8082**; **`live_dl`** / **`live_ul`**. |
-  | `compose/docker-compose.dlul.bw106.yaml` | **106** per backend | DL/UL stack with **106** PRB defaults. |
-  | `compose/docker-compose.dlul.bw273.yaml` | **273** per backend | Same DL/UL paths as **`compose/docker-compose.dlul.yaml`**; explicit **273** PRB profile file. |
-  Override with **`CUDA_IQ_PRB`** in the environment when you need a value different from the file’s default (DL/UL stacks use the same variable name on each service).
+- **Compose files:** `compose/docker-compose.yml` (single backend, path **`live`**), `compose/docker-compose.dlul.yaml` (two APIs **8081** / **8082**, paths **`live_dl`** / **`live_ul`**), `compose/docker-compose.rxnai.yaml` (RX + NAI). A ZeroMQ resource-grid header sets PRB and symbol count; `CUDA_IQ_PRB` is only the fallback when no header arrives.
 - **Frontend (single-stack compose):** **`VITE_API_RELATIVE=1`** and **`VITE_DEV_PROXY_TARGET=http://backend:8081`** — browser uses only **:5173** for UI + API + Swagger (see **Quick start**). **`VITE_API_BASE`** / **`VITE_API_BASE_*`**: if set to **`localhost`** / **`127.0.0.1`** but you open the UI at a LAN IP, the client rewrites the API host to match the page (**`frontend/src/config/panelLayout.ts`**). Dual DL/UL compose sets **`VITE_API_RELATIVE=0`** so each column keeps its own API URL.
 - **Manual FIFO ownership:** `scripts/chown_resgrid_fifos.sh` — `chown` every named pipe in the shared host **`/tmp`** mount by default (optional if **`RESGRID_FIFO_CHOWN`** already runs at creation).
 - **Environment template:** `.env.example` (IQ FIFO, MediaMTX, WebRTC, logging, `VITE_*`, FIFO chown).
@@ -244,9 +235,9 @@ cp .env.example .env   # optional; edit MTX_PUBLIC_HTTP_BASE / MTX_WEBRTC_ADDITI
 docker compose -f compose/docker-compose.yml up --build
 ```
 
-**Dual DL/UL:** `docker compose -f compose/docker-compose.dlul.yaml up --build` (second API on host **8082**; MediaMTX paths **`live_dl`** / **`live_ul`**; see `.env.example` for **`VITE_API_BASE_*`**). PRB-focused compose files: **`compose/docker-compose.dlul.bw106.yaml`** (default **106** per backend), **`compose/docker-compose.dlul.bw273.yaml`** (explicit **273** profile).
+**Dual DL/UL:** `docker compose -f compose/docker-compose.dlul.yaml up --build` (second API on host **8082**; MediaMTX paths **`live_dl`** / **`live_ul`**; see `.env.example` for **`VITE_API_BASE_*`**).
 
-**Single stack, fixed PRB defaults:** `docker compose -f compose/docker-compose.bw133.yml up --build` or **`-f compose/docker-compose.bw106.yml`**.
+**RX + NAI:** `docker compose -f compose/docker-compose.rxnai.yaml up --build`.
 
 UI: **http://&lt;host&gt;:5173** — OpenAPI: **http://&lt;host&gt;:5173/docs** (Vite proxies to the backend; avoids LAN **ERR_EMPTY_RESPONSE** when **:8081** is blocked). Direct API: **http://&lt;host&gt;:8081** when published. HLS base (example): **http://&lt;host&gt;:8888/live/**.
 

@@ -1,25 +1,27 @@
-# DL + UL stack: MediaMTX (live_dl / live_ul) + two FastAPI backends (:8081 DL, :8082 UL) + Vite frontend.
-# From resource-grid-visualizer (parent of compose/):
-#   docker compose -f compose/docker-compose.dlul.bw273.yaml up
-# Watch:
-#   docker compose -f compose/docker-compose.dlul.bw273.yaml watch
+# RX + NAI stack: MediaMTX (live_rx / live_nai) + two FastAPI backends (:8082 RX, :8083 NAI) + Vite frontend.
+# Grid width and height come from the first ZeroMQ resource-grid header (prb, symbols).
 #
-# LAN: http://<host-ip>:5173 — open TCP 5173,8081,8082,8888,8889 and 8189 tcp+udp (WebRTC default in frontend compose).
-# WebRTC: set MTX_WEBRTC_ADDITIONAL_HOSTS in `compose/.env` (see `compose/.env.example`).
-# GPU: same requirements as compose/docker-compose.yml (NVIDIA Container Toolkit). CPU-only: remove deploy under both backends, set VIDEO_ENCODER=cpu.
-# No container swap: `memswap_limit` must equal `memory` — Docker’s total cap is RAM+swap; equal values ⇒ swap room is 0 (not “8g of swap”).
+# Env file (required for LAN WebRTC video): copy and edit host IP
+#   cp compose/.env.example compose/.env
+# Run from resource-grid-visualizer/:
+#   docker compose -f compose/docker-compose.rxnai.yaml up
+# Or from compose/ (`.env` in cwd):
+#   docker compose -f docker-compose.rxnai.yaml up
 #
-# POSIX mq names are direction-specific in env (e.g. CUDA_IQ_MQ_PATH_DL / _UL); bind RESGRID_HOST_TMP for /tmp file use.
-# `ipc: host` on each backend shares the host IPC namespace so host writers can use the same /resgrid_* mq names.
-# PHY / cuBB in **another Docker container** must also use `ipc: host` (or `ipc: "service:backend-dl"` / `backend-ul`) on that service.
-# File capturer (JPEG): RESGRID_HOST_CAPTURER_SNAPS_{DL,UL} → /encoder-snaps (default ../encoder-snaps-dl, ../encoder-snaps-ul).
-# AUTO_START defaults to 1 for backend-dl and backend-ul; override with AUTO_START_DL=0 and/or AUTO_START_UL=0 to keep a side idle on boot.
+# Set MTX_WEBRTC_ADDITIONAL_HOSTS in compose/.env to this machine's LAN IP (as browsers reach it).
+#
+# Resource-grid IQ is a full ZeroMQ address. nv-cubb uses host network and binds
+# tcp://0.0.0.0:15556 (RX) and :15557 (NAI). Plotters connect through the host gateway.
 
 include:
-  - ../mediamtx/docker-compose.dlul.yml
+  - ../mediamtx/docker-compose.rxnai.yml
+
+x-env-file: &env_file
+  - .env
 
 services:
-  backend-dl:
+  backend-rx:
+    env_file: *env_file
     ipc: host
     ulimits:
       nofile:
@@ -46,42 +48,44 @@ services:
     environment:
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,video,utility}
-      MTX_RTSP_URL: rtsp://mediamtx:8554/live_dl
+      MTX_RTSP_URL: rtsp://mediamtx:8554/live_rx
       MTX_WAIT_HOST: mediamtx
       MTX_WAIT_PORT: "8554"
-      AUTO_START: ${AUTO_START_DL:-1}
+      AUTO_START: ${AUTO_START_RX:-1}
       CUDA_AUTO_START_IQ_GENERATOR: ${CUDA_AUTO_START_IQ_GENERATOR:-0}
       GENERATION_MODE: ${GENERATION_MODE:-SYNTHETIC_FAPI}
       VIDEO_ENCODER: ${VIDEO_ENCODER:-nvenc}
       CUDA_IQ_FPS: ${CUDA_IQ_FPS:-24}
       CUDA_IQ_CELL_PIXELS: ${CUDA_IQ_CELL_PIXELS:-6}
       CUDA_IQ_PRESET: ${CUDA_IQ_PRESET:-p4}
-      CUDA_IQ_PRB: ${CUDA_IQ_PRB:-273}
       CUDA_IQ_SYMBOLS: ${CUDA_IQ_SYMBOLS:-14}
       START_SYMBOL: ${START_SYMBOL:-0}
-      STOP_SYMBOL: ${STOP_SYMBOL:-13}
-      CUDA_IQ_MQ_PATH: ${CUDA_IQ_MQ_PATH_DL:-/resource_grid_dl}
+      STOP_SYMBOL: ${STOP_SYMBOL:-11}
+      CUPHY_RX_ZMQ_BIND: ${CUPHY_RX_ZMQ_BIND:-tcp://host.docker.internal:15556}
+      CUDA_IQ_ZMQ_BIND: ${CUPHY_RX_ZMQ_BIND:-tcp://host.docker.internal:15556}
       CUDA_IQ_GEN_FPS: ${CUDA_IQ_GEN_FPS:-200}
-      CUDA_SLOT_MQ_PATH: ${CUDA_SLOT_MQ_PATH_DL:-/fapi_dl}
-      RESGRID_MQ_IMAGES: ${RESGRID_MQ_IMAGES_DL:-/images_dl}
-      RESGRID_CAPTURER_DIR: ${RESGRID_CAPTURER_DIR_DL:-/encoder-snaps}
+      CUDA_SLOT_MQ_PATH: ${CUDA_SLOT_MQ_PATH_RX:-/fapi_rx}
+      RESGRID_MQ_IMAGES: ${RESGRID_MQ_IMAGES_RX:-/images_rx}
+      RESGRID_CAPTURER_DIR: ${RESGRID_CAPTURER_DIR_RX:-/encoder-snaps-rx}
       MTX_PUBLIC_HTTP_BASE: ${MTX_PUBLIC_HTTP_BASE:-http://localhost:8888}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
-      LOG_FILE: ${LOG_FILE_DL:-/app/logs/server_dl.log}
+      LOG_FILE: ${LOG_FILE_RX:-/app/logs/server_rx.log}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_MAX_BYTES: ${LOG_MAX_BYTES:-5000000}
       LOG_BACKUP_COUNT: ${LOG_BACKUP_COUNT:-3}
       LOG_ROTATE_WHEN: ${LOG_ROTATE_WHEN:-}
       LOG_ROTATE_INTERVAL: ${LOG_ROTATE_INTERVAL:-1}
       LOG_ROTATE_UTC: ${LOG_ROTATE_UTC:-0}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       mediamtx:
         condition: service_started
     ports:
-      - "8081:8081"
+      - "8082:8081"
     volumes:
       - ${RESGRID_HOST_TMP:-/tmp}:/tmp
-      - ${RESGRID_HOST_CAPTURER_SNAPS_DL:-../encoder-snaps-dl}:/encoder-snaps
+      - ${RESGRID_HOST_CAPTURER_SNAPS_RX:-../encoder-snaps-rx}:/encoder-snaps
       - ../backend/app:/app/app
       - ../backend/scripts:/app/scripts
       - ../backend/logs:/app/logs
@@ -109,7 +113,8 @@ services:
         - action: rebuild
           path: ../backend/plotter/include/viridis_lut.inc
 
-  backend-ul:
+  backend-nai:
+    env_file: *env_file
     ipc: host
     ulimits:
       nofile:
@@ -136,42 +141,44 @@ services:
     environment:
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,video,utility}
-      MTX_RTSP_URL: rtsp://mediamtx:8554/live_ul
+      MTX_RTSP_URL: rtsp://mediamtx:8554/live_nai
       MTX_WAIT_HOST: mediamtx
       MTX_WAIT_PORT: "8554"
-      AUTO_START: ${AUTO_START_UL:-1}
+      AUTO_START: ${AUTO_START:-1}
       CUDA_AUTO_START_IQ_GENERATOR: ${CUDA_AUTO_START_IQ_GENERATOR:-0}
       GENERATION_MODE: ${GENERATION_MODE:-SYNTHETIC_FAPI}
       VIDEO_ENCODER: ${VIDEO_ENCODER:-nvenc}
       CUDA_IQ_FPS: ${CUDA_IQ_FPS:-24}
       CUDA_IQ_CELL_PIXELS: ${CUDA_IQ_CELL_PIXELS:-6}
       CUDA_IQ_PRESET: ${CUDA_IQ_PRESET:-p4}
-      CUDA_IQ_PRB: ${CUDA_IQ_PRB:-273}
       CUDA_IQ_SYMBOLS: ${CUDA_IQ_SYMBOLS:-14}
       START_SYMBOL: ${START_SYMBOL:-0}
-      STOP_SYMBOL: ${STOP_SYMBOL:-13}
-      CUDA_IQ_MQ_PATH: ${CUDA_IQ_MQ_PATH_UL:-/resource_grid_ul}
+      STOP_SYMBOL: ${STOP_SYMBOL:-11}
+      CUPHY_NAI_ZMQ_BIND: ${CUPHY_NAI_ZMQ_BIND:-tcp://host.docker.internal:15557}
+      CUDA_IQ_ZMQ_BIND: ${CUPHY_NAI_ZMQ_BIND:-tcp://host.docker.internal:15557}
       CUDA_IQ_GEN_FPS: ${CUDA_IQ_GEN_FPS:-200}
-      CUDA_SLOT_MQ_PATH: ${CUDA_SLOT_MQ_PATH_UL:-/fapi_ul}
-      RESGRID_MQ_IMAGES: ${RESGRID_MQ_IMAGES_UL:-/images_ul}
-      RESGRID_CAPTURER_DIR: ${RESGRID_CAPTURER_DIR_UL:-/encoder-snaps}
+      CUDA_SLOT_MQ_PATH: ${CUDA_SLOT_MQ_PATH_NAI:-/fapi_nai}
+      RESGRID_MQ_IMAGES: ${RESGRID_MQ_IMAGES_NAI:-/images_nai}
+      RESGRID_CAPTURER_DIR: ${RESGRID_CAPTURER_DIR_NAI:-/encoder-snaps-nai}
       MTX_PUBLIC_HTTP_BASE: ${MTX_PUBLIC_HTTP_BASE:-http://localhost:8888}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
-      LOG_FILE: ${LOG_FILE_UL:-/app/logs/server_ul.log}
+      LOG_FILE: ${LOG_FILE_NAI:-/app/logs/server_nai.log}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_MAX_BYTES: ${LOG_MAX_BYTES:-5000000}
       LOG_BACKUP_COUNT: ${LOG_BACKUP_COUNT:-3}
       LOG_ROTATE_WHEN: ${LOG_ROTATE_WHEN:-}
       LOG_ROTATE_INTERVAL: ${LOG_ROTATE_INTERVAL:-1}
       LOG_ROTATE_UTC: ${LOG_ROTATE_UTC:-0}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       mediamtx:
         condition: service_started
     ports:
-      - "8082:8081"
+      - "8083:8081"
     volumes:
       - ${RESGRID_HOST_TMP:-/tmp}:/tmp
-      - ${RESGRID_HOST_CAPTURER_SNAPS_UL:-../encoder-snaps-ul}:/encoder-snaps
+      - ${RESGRID_HOST_CAPTURER_SNAPS_NAI:-../encoder-snaps-nai}:/encoder-snaps
       - ../backend/app:/app/app
       - ../backend/scripts:/app/scripts
       - ../backend/logs:/app/logs
@@ -200,7 +207,8 @@ services:
           path: ../backend/plotter/include/viridis_lut.inc
 
   frontend:
-    image: resouce-grid-frontend-vite-dlul
+    env_file: *env_file
+    image: resouce-grid-frontend-vite-rxnai
     build:
       context: ../frontend
       dockerfile: Dockerfile.dev
@@ -213,18 +221,21 @@ services:
       VITE_PLAYBACK_MODE: ${VITE_PLAYBACK_MODE:-webrtc}
       VITE_API_RELATIVE: "0"
       VITE_DEV_PROXY_TARGET: ""
-      VITE_API_BASE_DL: ${VITE_API_BASE_DL:-http://localhost:8081}
-      VITE_API_BASE_UL: ${VITE_API_BASE_UL:-http://localhost:8082}
-      VITE_GUI_MODE: ${VITE_GUI_MODE:-dlul}
+      VITE_API_BASE_RX: ${VITE_API_BASE_RX:-http://localhost:8082}
+      VITE_API_BASE_NAI: ${VITE_API_BASE_NAI:-http://localhost:8083}
+      VITE_GUI_MODE: ${VITE_GUI_MODE:-rxnai}
+      # MediaMTX paths (must match mediamtx.rxnai.yml + backend MTX_RTSP_URL)
+      VITE_PLAYBACK_PATH_RX: ${VITE_PLAYBACK_PATH_RX:-live_rx}
+      VITE_PLAYBACK_PATH_NAI: ${VITE_PLAYBACK_PATH_NAI:-live_nai_yolo}
     ports:
       - "5173:5173"
     volumes:
       - ../frontend:/app
-      - resgrid_dlul_frontend_node_modules:/app/node_modules
+      - resgrid_rxnai_frontend_node_modules:/app/node_modules
     depends_on:
       - mediamtx
-      - backend-dl
-      - backend-ul
+      - backend-rx
+      - backend-nai
     develop:
       watch:
         - action: rebuild
@@ -235,4 +246,4 @@ services:
           path: ../frontend/package-lock.json
 
 volumes:
-  resgrid_dlul_frontend_node_modules:
+  resgrid_rxnai_frontend_node_modules:

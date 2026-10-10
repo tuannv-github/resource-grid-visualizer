@@ -1,4 +1,4 @@
-# Same as compose/docker-compose.bw106.yml (PRB 106) plus resgrid_plotter --encode-policy mean:
+# Same as compose/docker-compose.yml plus resgrid_plotter --encode-policy mean.
 # each NVENC tick sends the per-pixel average of RGBA frames rendered since the previous tick (see CHANNEL_BASED_INTERFACE.md).
 # MediaMTX + backend + Vite frontend (bind mounts, HMR, uvicorn --reload).
 # LAN: http://<host-ip>:5173 — open TCP 5173,8081,8888,8889 and 8189 tcp+udp for WebRTC (default playback).

@@ -67,6 +67,7 @@ _backend_dir = Path(__file__).resolve().parents[1]
 if str(_backend_dir) not in sys.path:
     sys.path.insert(0, str(_backend_dir))
 from app.resgrid_posix_mq import ResgridMqWriter
+from app.resgrid_zmq import ResgridZmqPublisher, is_zmq_bind
 
 # Must match IQ_PATTERN_MAX in backend main.py and plotter_common.cuh (`backend/plotter/`).
 _IQ_PATTERN_MAX = 3
@@ -549,7 +550,7 @@ def run_slot_fifo_standalone(
 
 
 def _write_all(
-    fd: ResgridMqWriter,
+    fd: ResgridMqWriter | ResgridZmqPublisher,
     data: bytes,
     *,
     prb: int = 0,
@@ -1268,7 +1269,11 @@ def main() -> None:
     slot_id_counter = 1
     next_slot_deadline = time.perf_counter()
 
-    fd = ResgridMqWriter(args.mq_resource_grid)
+    fd = (
+        ResgridZmqPublisher(args.mq_resource_grid)
+        if is_zmq_bind(args.mq_resource_grid)
+        else ResgridMqWriter(args.mq_resource_grid)
+    )
     if args.mq_fapi:
         slot_fd = ResgridMqWriter(args.mq_fapi)
     symbol_windows: list[tuple[int, int]] | None = None

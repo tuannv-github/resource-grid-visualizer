@@ -61,7 +61,7 @@ Two **FastAPI** + **`resgrid_plotter`** publishers run in parallel and share one
 - **OpenAPI / Swagger:** Each column’s **OpenAPI /docs** link uses that column’s **`VITE_API_BASE_*`** (DL → **8081**, UL → **8082**). If those env values use **`localhost`** / **`127.0.0.1`** but you open the UI at a LAN IP, the frontend rewrites the host to **`window.location.hostname`** (**`frontend/src/config/panelLayout.ts`**).
 - **POSIX mq names:** Defaults are **direction-specific** in compose (**`CUDA_IQ_MQ_PATH_DL` / `_UL`**, **`CUDA_SLOT_MQ_PATH_DL` / `_UL`**, **`RESGRID_MQ_IMAGES_DL` / `_UL`** → per-service **`CUDA_IQ_MQ_PATH`** / **`CUDA_SLOT_MQ_PATH`** / **`RESGRID_MQ_IMAGES`** inside each container).
 
-Compose files: **`compose/docker-compose.dlul.yaml`** (default **273** PRB per backend), **`compose/docker-compose.dlul.bw106.yaml`** (**106**), **`compose/docker-compose.dlul.bw273.yaml`** (**273** naming variant).
+Compose file: **`compose/docker-compose.dlul.yaml`**. PRB and symbol count come from the ZeroMQ resource-grid header when that endpoint is used.
 
 **OAI gNB writer:** If **`resgrid_plotter`** or the backend **restarts**, the mq reader side may close and the gNB may see **`EPIPE` / Broken pipe** or **`mq_send`** errors on write. Current OAI MAC code **closes the writer fd** on write failure and **re-opens** on the next slot so connectivity recovers when the reader is back (see **`openairinterface5g/.../resgrid_plotter_slot_fifo.c`** — filename historic).
 

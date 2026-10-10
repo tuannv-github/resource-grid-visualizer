@@ -14,7 +14,7 @@ ARG TARGETARCH
 FROM nvidia/cuda:12.6.1-devel-ubuntu24.04 AS cuda-build
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends cmake ninja-build \
+    && apt-get install -y --no-install-recommends cmake ninja-build libzmq3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src/plotter
@@ -53,6 +53,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 FROM runtime-${TARGETARCH} AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libzmq5 \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m venv /venv
 ENV PATH="/venv/bin:$PATH"

@@ -5,6 +5,7 @@
 #include "plotter_assembler.cuh"
 
 #include <cstdio>
+#include <cstring>
 #include <errno.h>
 #include <memory>
 #include <thread>
@@ -361,7 +362,24 @@ void external_grid_frame_reader_main(ResgridMqStreamIn* mq, int ncells, GridFram
   }
 }
 
+static bool iq_endpoint_is_zmq(const char* path)
+{
+  if (!path) return false;
+  return std::strncmp(path, "ipc://", 6) == 0 || std::strncmp(path, "tcp://", 6) == 0
+      || std::strncmp(path, "inproc://", 9) == 0;
+}
+
 ResgridMqStreamIn* AssemblerStage::assembler_open_iq_mq_reader(const char* path, const char* wait_label) {
+  if (iq_endpoint_is_zmq(path)) {
+    fprintf(stderr, "resgrid_plotter: ZeroMQ SUB for IQ %s (%s)\n", path, wait_label);
+    auto* z = new ResgridZmqStreamIn();
+    if (!z->open_read(path)) {
+      fprintf(stderr, "open --mq-resource-grid (zmq) failed\n");
+      delete z;
+      return nullptr;
+    }
+    return z;
+  }
   fprintf(stderr, "resgrid_plotter: waiting for IQ writer on %s (%s)\n", path, wait_label);
   auto* p = new ResgridMqStreamIn();
   if (!p->open_read(path)) {

@@ -4,26 +4,69 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <title>Resource grid — live</title>
+    <title>NeuroRAN Resource Grid</title>
   </head>
   <body>
-    <div id="app" class="rg-app">
-      <header class="rg-app__toolbar">
-        <h1 class="rg-app__title">Resource grid — live</h1>
-        <span class="rg-app__toolbar-spacer" aria-hidden="true"></span>
-        <button
-          type="button"
-          data-role="btn-sidebar-toggle"
-          class="rg-app__sidebar-toggle"
-          aria-controls="rg-sidebar"
-          aria-pressed="false"
-          title="Hide / show the Plotter &amp; Generator side panel"
-        >
-          <span class="rg-app__sidebar-toggle-icon" aria-hidden="true">»</span>
-          <span class="rg-app__sidebar-toggle-label" data-role="btn-sidebar-toggle-label">Hide sidebar</span>
-        </button>
-      </header>
+    <div id="app" class="app theme-dark density-compact rg-app" style="--accent:#16E6A0;--accent2:#00C2D4;--accent-glow:#16E6A088;--bad:#FF5A6E">
+      <aside class="rail">
+        <div class="rail-brand" title="NeuroRAN">
+          <img class="rail-logo" src="/NeuroRAN.png" alt="NeuroRAN" />
+        </div>
+        <nav class="rail-nav" aria-label="Main navigation">
+          <button type="button" class="rail-tab rail-tab-active" aria-current="page">
+            <span class="rail-tab-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 12c1.5 0 1.5-6 3-6s1.5 12 3 12 1.5-9 3-9 1.5 6 3 6 1.5-3 3-3"></path>
+              </svg>
+            </span>
+            <span class="rail-tab-label">Grids</span>
+          </button>
+        </nav>
+        <div class="rail-foot">
+          <div class="rail-status" title="Resource grid · Live">
+            <span class="rail-status-dot"></span>
+            <span class="rail-status-text">Live</span>
+          </div>
+        </div>
+      </aside>
 
+      <div class="app-body">
+        <div class="main-col">
+          <header class="topbar">
+            <div class="crumb">Resource grid</div>
+            <span class="site-badge" data-role="site-badge">Live</span>
+            <div class="topbar-right">
+              <span class="clock" title="Local time">
+                <span class="status-dot dot-ok" aria-hidden="true"></span>
+                <span data-role="shell-clock">--:--:--</span>
+              </span>
+              <button
+                type="button"
+                class="icon-btn icon-btn-sq"
+                data-role="btn-theme"
+                title="Switch to light mode"
+                aria-label="Switch to light mode"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <circle cx="12" cy="12" r="4" />
+                  <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                data-role="btn-sidebar-toggle"
+                class="icon-btn rg-app__sidebar-toggle"
+                aria-controls="rg-sidebar"
+                aria-pressed="false"
+                title="Hide / show the Plotter and Generator side panel"
+              >
+                <span class="rg-app__sidebar-toggle-icon" aria-hidden="true">»</span>
+                <span data-role="btn-sidebar-toggle-label">Hide sidebar</span>
+              </button>
+            </div>
+          </header>
+
+          <main class="dash">
       <div class="rg-dashboard">
         <div class="rg-media-stack-host">
         <div class="rg-dashboard__media" id="rg-media-stack" aria-label="Resource grids">
@@ -116,7 +159,7 @@
               <p class="rg-panel-meta">
                 <a data-role="swagger-link" href="#" target="_blank" rel="noopener">OpenAPI /docs</a>
               </p>
-              <p data-role="status" class="playback-status">Connecting…</p>
+              <p data-role="status" class="playback-status" data-state="warn">Connecting…</p>
             </header>
 
             <article
@@ -330,7 +373,7 @@
               <p class="rg-panel-meta">
                 <a data-role="swagger-link" href="#" target="_blank" rel="noopener">OpenAPI /docs</a>
               </p>
-              <p data-role="status" class="playback-status">Connecting…</p>
+              <p data-role="status" class="playback-status" data-state="warn">Connecting…</p>
             </header>
 
             <article
@@ -533,6 +576,9 @@
             </article>
           </section>
         </aside>
+      </div>
+          </main>
+        </div>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>

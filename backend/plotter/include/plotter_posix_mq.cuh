@@ -27,21 +27,21 @@ static constexpr size_t kResgridMqChunkWireHdrV1Bytes = 24u;
 class ResgridMqStreamIn {
  public:
   ResgridMqStreamIn() = default;
-  ~ResgridMqStreamIn() { close(); }
+  virtual ~ResgridMqStreamIn() { close(); }
   ResgridMqStreamIn(const ResgridMqStreamIn&) = delete;
   ResgridMqStreamIn& operator=(const ResgridMqStreamIn&) = delete;
 
   bool open_read(const char* mq_name);
   void close();
 
-  /** Blocking read of exactly **n** bytes (uses 500 ms mq timeouts while waiting), like read(2) on a pipe. */
-  bool read_exact(void* buf, size_t n, const char* ctx);
+  /** Blocking read of exactly **n** bytes (uses 500 ms timeouts while waiting), like read(2) on a pipe. */
+  virtual bool read_exact(void* buf, size_t n, const char* ctx);
 
-  bool ok() const { return mq_ >= 0; }
+  virtual bool ok() const { return mq_ >= 0; }
 
-  /** Dimensions from the most recently completed logical mq frame (v2 header); 0 if v1 or unset. */
-  uint16_t last_frame_prb() const { return last_frame_prb_; }
-  uint16_t last_frame_symbols() const { return last_frame_symbols_; }
+  /** Dimensions from the most recently completed logical frame; 0 if unknown. */
+  virtual uint16_t last_frame_prb() const { return last_frame_prb_; }
+  virtual uint16_t last_frame_symbols() const { return last_frame_symbols_; }
 
  private:
   bool pump_one_logical_frame();
@@ -69,3 +69,34 @@ void resgrid_mq_unlink_name(const char* mq_name);
 /** Send one logical frame (may span multiple mq messages). **frame_seq** must change for each frame. */
 bool resgrid_mq_send_frame(int wq, const void* data, size_t len, uint32_t frame_seq, long mq_msgsize_cap,
                            uint16_t prb = 0, uint16_t symbols = 0);
+
+/**
+ * Resource-grid IQ over ZeroMQ SUB. ``path`` is a full address (``ipc://`` or ``tcp://``).
+ * Each message is two parts: a text header (``resgrid_nai seq=1 prb=133 symbols=14 bytes=N``) and raw float32 IQ.
+ * Images and FAPI stay on POSIX mq.
+ */
+class ResgridZmqStreamIn : public ResgridMqStreamIn {
+ public:
+  ResgridZmqStreamIn();
+  ~ResgridZmqStreamIn() override;
+
+  bool open_read(const char* path);
+  bool read_exact(void* buf, size_t n, const char* ctx) override;
+  bool ok() const override { return ok_; }
+  uint16_t last_frame_prb() const override { return prb_; }
+  uint16_t last_frame_symbols() const override { return symbols_; }
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+  std::vector<uint8_t> pending_{};
+  size_t pending_off_ = 0;
+  uint16_t prb_ = 0;
+  uint16_t symbols_ = 0;
+  bool ok_ = false;
+
+  bool pump_one_frame();
+};
+
+/** Connect, read one resource-grid header, then disconnect. Used to size the canvas before CUDA alloc. */
+bool resgrid_zmq_peek_grid_dims(const char* endpoint, int timeout_ms, int* prb, int* symbols);

@@ -2,6 +2,7 @@
  * Management: process globals, queue-drop warnings, CLI parsing, and `plotter_run_launch` (see `plotter_pipeline.cu`).
  */
 #include "plotter_pipeline.cuh"
+#include "plotter_posix_mq.cuh"
 
 #include <algorithm>
 #include <mutex>
@@ -237,7 +238,7 @@ int main(int argc, char** argv) {
     sym_disp_start = 0;
     sym_disp_stop = sym - 1;
   }
-  const int sym_disp_count = sym_disp_stop - sym_disp_start + 1;
+  int sym_disp_count = sym_disp_stop - sym_disp_start + 1;
 
   const bool have_fapi = !mq_fapi.empty();
   const bool have_res = !mq_resource_grid.empty();
@@ -255,6 +256,31 @@ int main(int argc, char** argv) {
   }
   const bool resource_grid_slot_stream =
       have_res && !have_fapi && str_ieq(mq_resource_grid_mode.c_str(), "slot");
+
+  /* Size the canvas from the first live header so CUDA_IQ_PRB does not have to match the cell. */
+  if (have_res && !resource_grid_slot_stream) {
+    const bool zmq_iq = mq_resource_grid.rfind("ipc://", 0) == 0 || mq_resource_grid.rfind("tcp://", 0) == 0 ||
+                        mq_resource_grid.rfind("inproc://", 0) == 0;
+    int det_prb = 0;
+    int det_sym = 0;
+    if (zmq_iq && resgrid_zmq_peek_grid_dims(mq_resource_grid.c_str(), 5000, &det_prb, &det_sym)) {
+      fprintf(stderr, "%s: grid size from ZeroMQ header prb=%d symbols=%d\n", argv[0], det_prb, det_sym);
+      prb = det_prb;
+      sym = det_sym;
+      sym_disp_start = (sym_start_cli >= 0) ? sym_start_cli : 0;
+      sym_disp_stop = (sym_stop_cli >= 0) ? sym_stop_cli : (sym - 1);
+      if (sym_disp_start < 0 || sym_disp_start >= sym) sym_disp_start = 0;
+      if (sym_disp_stop < 0 || sym_disp_stop >= sym) sym_disp_stop = sym - 1;
+      if (sym_disp_stop < sym_disp_start) {
+        sym_disp_start = 0;
+        sym_disp_stop = sym - 1;
+      }
+      sym_disp_count = sym_disp_stop - sym_disp_start + 1;
+    } else if (zmq_iq) {
+      fprintf(stderr, "%s: no ZeroMQ resource-grid header within 5s; using --prb %d --symbols %d\n", argv[0], prb,
+              sym);
+    }
+  }
 
   int frame_w;
   int frame_h;

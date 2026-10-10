@@ -11,6 +11,7 @@ add_executable(
   src/plotter_management.cu
   src/plotter_pipeline.cu
   src/plotter_posix_mq.cpp
+  src/plotter_zmq.cpp
   src/plotter_assembler.cu
   src/plotter_raster.cu
   src/plotter_encoder.cu
@@ -22,7 +23,7 @@ target_include_directories(
 )
 target_link_libraries(resgrid_plotter PRIVATE CUDA::cudart)
 if(UNIX AND NOT APPLE)
-  target_link_libraries(resgrid_plotter PRIVATE rt)
+  target_link_libraries(resgrid_plotter PRIVATE rt zmq)
 endif()
 
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES OR CMAKE_CUDA_ARCHITECTURES STREQUAL "")
