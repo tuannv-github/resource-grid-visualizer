@@ -136,7 +136,7 @@ function rxNaiPanels(rx: string, nai: string): PanelBoot[] {
       apiBase: rewriteApiBaseToPageHost(nai),
       playbackPath: paths.nai,
       modeSelectId: "mode-select-nai",
-      heading: "NAI",
+      heading: "NaI",
     },
   ];
 }

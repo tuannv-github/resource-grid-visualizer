@@ -12,19 +12,28 @@
     </style>
   </head>
   <body>
-    <div id="app" class="app theme-dark density-compact rg-app" style="--accent:#16E6A0;--accent2:#00C2D4;--accent-glow:#16E6A088;--bad:#FF5A6E">
+    <div id="app" class="app theme-dark density-compact rg-app rg-app--sidebar-hidden" style="--accent:#16E6A0;--accent2:#00C2D4;--accent-glow:#16E6A088;--bad:#FF5A6E">
       <aside class="rail">
         <div class="rail-brand" title="NeuroRAN">
           <img class="rail-logo" src="/NeuroRAN.png" alt="NeuroRAN" width="68" height="57" />
         </div>
         <nav class="rail-nav" aria-label="Main navigation">
-          <button type="button" class="rail-tab rail-tab-active" aria-current="page">
+          <button type="button" class="rail-tab rail-tab-active" data-rail-tab="grids" aria-current="page">
             <span class="rail-tab-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M3 12c1.5 0 1.5-6 3-6s1.5 12 3 12 1.5-9 3-9 1.5 6 3 6 1.5-3 3-3"></path>
               </svg>
             </span>
             <span class="rail-tab-label">Grids</span>
+          </button>
+          <button type="button" class="rail-tab" data-rail-tab="generate">
+            <span class="rail-tab-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.82 1.17V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 6.6 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 3.09 14 1.65 1.65 0 0 0 3 12a2 2 0 1 1 0-4 1.65 1.65 0 0 0 1.09-2.82l-.06-.06A2 2 0 1 1 6.86 2.3l.06.06A1.65 1.65 0 0 0 9 3.09 1.65 1.65 0 0 0 12 3a2 2 0 1 1 4 0 1.65 1.65 0 0 0 2.82 1.17l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 21 12a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+              </svg>
+            </span>
+            <span class="rail-tab-label">Generate</span>
           </button>
         </nav>
         <div class="rail-foot">
@@ -63,6 +72,7 @@
                 class="icon-btn rg-app__sidebar-toggle"
                 aria-controls="rg-sidebar"
                 aria-pressed="false"
+                hidden
                 title="Hide / show the Plotter and Generator side panel"
               >
                 <span class="rg-app__sidebar-toggle-icon" aria-hidden="true">»</span>
@@ -77,6 +87,13 @@
         <div class="rg-dashboard__media" id="rg-media-stack" aria-label="Resource grids">
           <section id="panel-dl-media" class="rg-media-card" data-direction="dl" aria-label="Downlink video">
             <div class="layout-media layout-media--solo">
+              <div class="plot-head">
+                <h2 class="plot-title" data-role="plot-title">Downlink</h2>
+                <div class="plot-controls" role="group" aria-label="Plotter">
+                  <button type="button" class="btn btn-primary" data-role="plot-start">Start</button>
+                  <button type="button" class="btn btn-danger" data-role="plot-stop" disabled>Stop</button>
+                </div>
+              </div>
               <p class="media-status" data-role="media-status" data-state="warn" aria-live="polite">
                 <span data-role="media-status-plotter">Plotter —</span>
                 <span data-role="media-status-grid">Grid —</span>
@@ -105,24 +122,18 @@
                   ></div>
                 </div>
               </figure>
-              <section data-role="iq-legend-section" class="iq-legend" hidden aria-label="PHY channel legend">
-                <div data-role="iq-legend-columns" class="iq-legend-columns">
-                  <div class="iq-legend-col iq-legend-col--dl">
-                    <div class="iq-legend-col-title">DL</div>
-                    <ul data-role="iq-legend-list-dl" class="iq-legend-list iq-legend-list--col"></ul>
-                  </div>
-                  <div class="iq-legend-col iq-legend-col--ul">
-                    <div class="iq-legend-col-title">UL</div>
-                    <ul data-role="iq-legend-list-ul" class="iq-legend-list iq-legend-list--col"></ul>
-                  </div>
-                </div>
-                <div data-role="iq-legend-notes" class="iq-legend-notes" aria-live="polite"></div>
-              </section>
             </div>
           </section>
 
           <section id="panel-ul-media" class="rg-media-card" data-direction="ul" aria-label="Uplink video" hidden>
             <div class="layout-media layout-media--solo">
+              <div class="plot-head">
+                <h2 class="plot-title" data-role="plot-title">Uplink</h2>
+                <div class="plot-controls" role="group" aria-label="Plotter">
+                  <button type="button" class="btn btn-primary" data-role="plot-start">Start</button>
+                  <button type="button" class="btn btn-danger" data-role="plot-stop" disabled>Stop</button>
+                </div>
+              </div>
               <p class="media-status" data-role="media-status" data-state="warn" aria-live="polite">
                 <span data-role="media-status-plotter">Plotter —</span>
                 <span data-role="media-status-grid">Grid —</span>
@@ -151,19 +162,6 @@
                   ></div>
                 </div>
               </figure>
-              <section data-role="iq-legend-section" class="iq-legend" hidden aria-label="PHY channel legend">
-                <div data-role="iq-legend-columns" class="iq-legend-columns">
-                  <div class="iq-legend-col iq-legend-col--dl">
-                    <div class="iq-legend-col-title">DL</div>
-                    <ul data-role="iq-legend-list-dl" class="iq-legend-list iq-legend-list--col"></ul>
-                  </div>
-                  <div class="iq-legend-col iq-legend-col--ul">
-                    <div class="iq-legend-col-title">UL</div>
-                    <ul data-role="iq-legend-list-ul" class="iq-legend-list iq-legend-list--col"></ul>
-                  </div>
-                </div>
-                <div data-role="iq-legend-notes" class="iq-legend-notes" aria-live="polite"></div>
-              </section>
             </div>
           </section>
         </div>

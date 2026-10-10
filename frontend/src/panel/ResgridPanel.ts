@@ -85,6 +85,8 @@ export class ResgridPanel {
   private pubGenFapi: HTMLElement;
   private btnPlotterStart: HTMLButtonElement;
   private btnPlotterStop: HTMLButtonElement;
+  private plotStartBtn: HTMLButtonElement | null = null;
+  private plotStopBtn: HTMLButtonElement | null = null;
   private btnGeneratorStart: HTMLButtonElement;
   private btnGeneratorStop: HTMLButtonElement;
   private statusPoll: ReturnType<typeof setInterval> | null = null;
@@ -120,6 +122,8 @@ export class ResgridPanel {
     this.pubGenFapi = requireRole(this.controlsRoot, "pub-gen-fapi");
     this.btnPlotterStart = requireRole(this.controlsRoot, "btn-plotter-start");
     this.btnPlotterStop = requireRole(this.controlsRoot, "btn-plotter-stop");
+    this.plotStartBtn = queryRole<HTMLButtonElement>(this.mediaRoot, "plot-start");
+    this.plotStopBtn = queryRole<HTMLButtonElement>(this.mediaRoot, "plot-stop");
     this.btnGeneratorStart = requireRole(this.controlsRoot, "btn-generator-start");
     this.btnGeneratorStop = requireRole(this.controlsRoot, "btn-generator-stop");
 
@@ -429,8 +433,7 @@ export class ResgridPanel {
     }
 
     /* Plotter accepts FIFO/env configuration; do not gate Start on UI **mode**. */
-    this.btnPlotterStart.disabled = cudaPlotterUp;
-    this.btnPlotterStop.disabled = !cudaPlotterUp;
+    this.syncPlotterButtons(cudaPlotterUp);
     const srcSel = queryRole<HTMLSelectElement>(this.controlsRoot, "synthetic-images-lavfi-source");
     if (srcSel) {
       srcSel.disabled = syntheticImagesFeedUp;
@@ -522,8 +525,7 @@ export class ResgridPanel {
       this.pubPath.textContent = "—";
       this.pubFrames.textContent = "—";
       this.pubIqProducerFps.textContent = "—";
-      this.btnPlotterStart.disabled = false;
-      this.btnPlotterStop.disabled = true;
+      this.syncPlotterButtons(false);
       this.btnGeneratorStart.disabled = true;
       this.btnGeneratorStop.disabled = true;
       this.pubGenFapi.textContent = "—";
@@ -556,6 +558,13 @@ export class ResgridPanel {
     inp.value = String(Math.trunc(j.encoder_fps));
   }
 
+  private syncPlotterButtons(running: boolean): void {
+    this.btnPlotterStart.disabled = running;
+    this.btnPlotterStop.disabled = !running;
+    if (this.plotStartBtn) this.plotStartBtn.disabled = running;
+    if (this.plotStopBtn) this.plotStopBtn.disabled = !running;
+  }
+
   async onPlotterStart(): Promise<void> {
     const encOpt = this.plotterEncoderFpsStartOption();
     if (encOpt !== undefined && (encOpt < 1 || encOpt > 50)) {
@@ -565,6 +574,7 @@ export class ResgridPanel {
       return;
     }
     this.btnPlotterStart.disabled = true;
+    if (this.plotStartBtn) this.plotStartBtn.disabled = true;
     try {
       const startBody: { encoder_fps?: number } = {};
       if (encOpt !== undefined) startBody.encoder_fps = encOpt;
@@ -717,6 +727,7 @@ export class ResgridPanel {
 
   async onPlotterStop(): Promise<void> {
     this.btnPlotterStop.disabled = true;
+    if (this.plotStopBtn) this.plotStopBtn.disabled = true;
     try {
       const r = await this.api.postPlotterStop(logPlayback);
       if (!r.ok) {
@@ -770,6 +781,8 @@ export class ResgridPanel {
     this.setSwaggerLink();
     this.btnPlotterStart.addEventListener("click", () => void this.onPlotterStart());
     this.btnPlotterStop.addEventListener("click", () => void this.onPlotterStop());
+    this.plotStartBtn?.addEventListener("click", () => void this.onPlotterStart());
+    this.plotStopBtn?.addEventListener("click", () => void this.onPlotterStop());
     this.btnGeneratorStart.addEventListener("click", () => void this.onGeneratorStart());
     this.btnGeneratorStop.addEventListener("click", () => void this.onGeneratorStop());
     queryRole<HTMLButtonElement>(this.controlsRoot, "btn-generator-resource-grid-fps-apply")?.addEventListener(

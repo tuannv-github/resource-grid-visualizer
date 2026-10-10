@@ -3,6 +3,7 @@ import { resolvePanels, type ResolvedGuiLayout } from "../config/panelLayout";
 import { ResgridPanel } from "../panel/ResgridPanel";
 import { mountSidebarToggle } from "../ui/sidebarToggle";
 import { mountShell } from "../ui/shell";
+import { mountRailTabs } from "../ui/railTabs";
 
 const livePanels: ResgridPanel[] = [];
 
@@ -51,7 +52,7 @@ function prunePanelsNotInLayout(desiredMedia: Set<string>, desiredControls: Set<
 }
 
 function siteLabel(mode: ResolvedGuiLayout["layoutMode"]): string {
-  if (mode === "rxnai" || mode === "ulnai") return "RX · NAI";
+  if (mode === "rxnai" || mode === "ulnai") return "RX · NaI";
   if (mode === "dlul") return "DL · UL";
   return "Live";
 }
@@ -100,8 +101,9 @@ export function bootApp(): void {
   applyLayoutRootClasses(app, cfg);
   mountShell(app, siteLabel(cfg.layoutMode));
   syncDomToLayout(cfg);
-  /* Mount before panels: applies persisted `rg-app--sidebar-hidden` synchronously so the dashboard
-   * grid mounts in its final shape (no flash of full sidebar on reload). */
+  /* Grids is the first screen: plots only. Generate is the second screen and
+   * brings the plotter/generator sidebar back. */
+  mountRailTabs(app);
   mountSidebarToggle(app);
 
   console.info(
@@ -119,6 +121,9 @@ export function bootApp(): void {
     }
     const heading = controlsRoot.querySelector<HTMLElement>(".rg-panel-heading");
     if (heading) heading.textContent = spec.heading;
+    const plotTitle = mediaRoot.querySelector<HTMLElement>('[data-role="plot-title"]');
+    if (plotTitle) plotTitle.textContent = spec.heading;
+    mediaRoot.setAttribute("aria-label", `${spec.heading} video`);
     const panel = new ResgridPanel(mediaRoot as HTMLElement, {
       apiBase: spec.apiBase,
       playbackPath: spec.playbackPath,

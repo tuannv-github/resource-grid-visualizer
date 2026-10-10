@@ -23,8 +23,29 @@ body {
 
 #app .app-body,
 #app .main-col {
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-width: 0;
   min-height: 0;
-  height: 100%;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+}
+
+/* The shared shell turns .app-body into a column under 1280px and does not
+   stretch it, which leaves the plots on only part of the window. */
+@media (max-width: 1279px) {
+  #app .app-body {
+    flex-direction: row;
+    align-items: stretch;
+  }
+}
+
+@media (max-width: 767px) {
+  #app .app-body {
+    flex-direction: column;
+    width: 100%;
+  }
 }
 
 #app .main-col {
@@ -87,6 +108,10 @@ body {
   display: none !important;
 }
 
+[data-role="btn-sidebar-toggle"][hidden] {
+  display: none !important;
+}
+
 /* Sizing context for tall vs wide auto-layout of #rg-media-stack */
 .rg-media-stack-host {
   min-width: 0;
@@ -109,13 +134,20 @@ body {
   overflow: hidden;
 }
 
-/* Dual (DL+UL or UL+NAI): side-by-side when host is wide, stacked when tall */
+/* Dual plots sit side by side until the area is too narrow for two axis gutters
+   plus a readable square, then they stack. */
 .rg-app--dual #rg-media-stack {
   flex-direction: row;
   align-items: stretch;
 }
 
 @container rg-media-stack (aspect-ratio < 1) {
+  .rg-app--dual #rg-media-stack {
+    flex-direction: column;
+  }
+}
+
+@container rg-media-stack (max-width: 46rem) {
   .rg-app--dual #rg-media-stack {
     flex-direction: column;
   }
@@ -320,7 +352,6 @@ body {
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.08em;
-  text-transform: uppercase;
   color: var(--text-dim);
   flex: 0 0 auto;
   white-space: nowrap;
@@ -356,15 +387,86 @@ body {
   white-space: nowrap;
 }
 
+.plot-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 0 0 0.35rem;
+  min-width: 0;
+  min-height: 28px;
+}
+
+.plot-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  margin: 0;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text);
+  text-align: center;
+}
+
+.plot-controls {
+  display: none;
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  flex: 0 0 auto;
+  gap: 0.4rem;
+}
+
+#app:not(.rg-app--tab-generate) .plot-controls {
+  display: flex;
+}
+
+.plot-controls .btn {
+  min-height: 28px;
+  padding: 4px 10px;
+}
+
+/* Narrow card: keep Start/Stop from covering the centered title. */
+@container rg-media (max-width: 22rem) {
+  .plot-head {
+    justify-content: space-between;
+  }
+
+  .plot-title {
+    width: auto;
+    flex: 1 1 auto;
+    overflow: hidden;
+  }
+
+  #app:not(.rg-app--tab-generate) .plot-controls {
+    position: static;
+    transform: none;
+  }
+}
+
 .media-status {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 0.35rem 0.9rem;
   margin: 0 0 0.4rem;
+  min-height: 1.35em;
+  overflow: hidden;
   font-family: "IBM Plex Mono", monospace;
   font-size: 11px;
   line-height: 1.35;
   color: var(--text-dim);
+}
+
+.media-status > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .media-status[data-state="ok"] {
@@ -390,9 +492,13 @@ body {
 
 .layout-media--solo {
   max-height: none;
-  /* Size queries so IQ plot can cap to this column’s width and height */
+}
+
+/* Size the square from the figure only, so the title and status above it
+   do not change the plot size from card to card. */
+.layout-media--solo .video-figure {
   container-type: size;
-  container-name: solo-media;
+  container-name: plot-figure;
 }
 
 /* Fill the media column: gives the figure a definite block-size so 16:9 / IQ grids lay out reliably */
@@ -426,7 +532,7 @@ body {
  * the figure must use flex:1 1 0 from .layout-media--solo .video-figure so extra column height isn’t stuck at flex-start.
  */
 .layout-media--solo .video-figure:has([data-role="video-axes"][data-iq-visible="true"]) {
-  align-items: stretch;
+  align-items: center;
   justify-content: center;
 }
 
@@ -587,26 +693,27 @@ body {
 
 .video-axes[data-iq-visible="true"] {
   /*
-   * Cap plot width to this grid’s own width (not vmin alone — vmin can exceed a narrow .layout column).
-   * 3.5rem ≈ tick column + column-gap; keeps the video column inside .video-figure.
+   * Left column is the PRB axis. A matching empty column on the right keeps the
+   * heatmap centered, so the two plots stay symmetric.
+   * 6rem = two 2.5rem axis columns + two 0.5rem gaps.
    */
-  --iq-plot-size: min(
-    calc(100% - 3.5rem),
-    min(92vmin, calc(100vh - 11rem))
+  --iq-axis: 2.5rem;
+  --iq-plot-size: max(
+    0px,
+    min(
+      max(0px, calc(100% - 6rem)),
+      min(92vmin, max(0px, calc(100vh - 11rem)))
+    )
   );
-  /* One shared column width: ticks + label edges align with video pixels. */
-  grid-template-columns: 2.5rem minmax(0, var(--iq-plot-size));
+  grid-template-columns: var(--iq-axis) minmax(0, var(--iq-plot-size)) var(--iq-axis);
   grid-template-rows: auto auto auto;
   align-content: center;
-  /* Full-width container; plot + tick column centered when narrower than the card */
   justify-content: center;
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
-  /* No vertical gutter between title / frame / ticks (removes visible top & bottom bands). */
   row-gap: 0;
   column-gap: 0.5rem;
-  /* Shrink-wrapped height from rows; flex:1 on grid broke row sizing / video in some layouts */
   flex: 0 0 auto;
   min-height: 0;
 }
@@ -660,25 +767,27 @@ body {
 
 @supports (width: 1cqi) {
   .rg-media-card .video-axes[data-iq-visible="true"] {
-    --iq-plot-size: min(
-      calc(100% - 3.5rem),
-      100cqi - 3.5rem,
-      92vmin,
-      calc(100vh - 11rem)
+    --iq-plot-size: max(
+      0px,
+      min(
+        max(0px, calc(100% - 6rem)),
+        max(0px, 100cqi - 6rem),
+        92vmin,
+        max(0px, calc(100vh - 11rem))
+      )
     );
   }
 
-  /* Solo media column: cap square to column height as well as width (avoids vmin overflow).
-   * Guard cqh: before layout / zero block-size, 100cqh can be 0 → negative calc broke --iq-plot-size and hid video. */
+  /* Figure is the size container: 100cqh is the space under the title, not the whole card.
+   * 1.75rem leaves the symbol label and tick row. 6rem is both axis columns plus gaps.
+   * Clamp at 0 so a narrow card cannot feed a negative size into the grid. */
   .layout-media--solo .video-axes[data-iq-visible="true"] {
     --iq-plot-size: max(
       1px,
       min(
-        calc(100% - 3.5rem),
-        100cqi - 3.5rem,
-        max(0px, calc(100cqh - 5rem)),
-        92vmin,
-        calc(100vh - 11rem)
+        max(0px, calc(100cqi - 6rem)),
+        max(0px, calc(100cqh - 1.75rem)),
+        92vmin
       )
     );
   }
@@ -873,13 +982,13 @@ body {
 
 @media (max-width: 960px) {
   .rg-dashboard {
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 1fr) minmax(0, 42vh);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
   }
 
-  /* Sidebar hidden: drop the second row so the media stack fills the viewport. */
-  .rg-app--sidebar-hidden .rg-dashboard {
-    grid-template-rows: minmax(0, 1fr);
+  /* Generate tab with the sidebar open: plots on top, controls underneath. */
+  .rg-app--tab-generate:not(.rg-app--sidebar-hidden) .rg-dashboard {
+    grid-template-rows: minmax(0, 1fr) minmax(12rem, 38vh);
   }
 
   .rg-dashboard__side {
