@@ -5,12 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <title>NeuroRAN Resource Grid</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #070b14; overflow: hidden; }
+      .rail { width: 92px; max-width: 92px; overflow: hidden; }
+      .rail-logo { display: block; width: 68px; max-width: 68px; height: auto; }
+    </style>
   </head>
   <body>
     <div id="app" class="app theme-dark density-compact rg-app" style="--accent:#16E6A0;--accent2:#00C2D4;--accent-glow:#16E6A088;--bad:#FF5A6E">
       <aside class="rail">
         <div class="rail-brand" title="NeuroRAN">
-          <img class="rail-logo" src="/NeuroRAN.png" alt="NeuroRAN" />
+          <img class="rail-logo" src="/NeuroRAN.png" alt="NeuroRAN" width="68" height="57" />
         </div>
         <nav class="rail-nav" aria-label="Main navigation">
           <button type="button" class="rail-tab rail-tab-active" aria-current="page">
@@ -72,6 +77,12 @@
         <div class="rg-dashboard__media" id="rg-media-stack" aria-label="Resource grids">
           <section id="panel-dl-media" class="rg-media-card" data-direction="dl" aria-label="Downlink video">
             <div class="layout-media layout-media--solo">
+              <p class="media-status" data-role="media-status" data-state="warn" aria-live="polite">
+                <span data-role="media-status-plotter">Plotter —</span>
+                <span data-role="media-status-grid">Grid —</span>
+                <span data-role="media-status-iq">IQ —</span>
+                <span data-role="media-status-play">Connecting…</span>
+              </p>
               <figure class="video-figure" aria-label="Live stream">
                 <div class="video-axes" data-role="video-axes" data-iq-visible="false">
                   <div class="va-corner" aria-hidden="true"></div>
@@ -112,6 +123,12 @@
 
           <section id="panel-ul-media" class="rg-media-card" data-direction="ul" aria-label="Uplink video" hidden>
             <div class="layout-media layout-media--solo">
+              <p class="media-status" data-role="media-status" data-state="warn" aria-live="polite">
+                <span data-role="media-status-plotter">Plotter —</span>
+                <span data-role="media-status-grid">Grid —</span>
+                <span data-role="media-status-iq">IQ —</span>
+                <span data-role="media-status-play">Connecting…</span>
+              </p>
               <figure class="video-figure" aria-label="Live stream">
                 <div class="video-axes" data-role="video-axes" data-iq-visible="false">
                   <div class="va-corner" aria-hidden="true"></div>
@@ -270,7 +287,11 @@
                       <dt>Publishing</dt>
                       <dd data-role="pub-publishing">—</dd>
                       <dt>Plotter (CUDA)</dt>
-                      <dd data-role="pub-cuda-plotter-status">Stopped</dd>
+                      <dd data-role="pub-cuda-plotter-status" data-state="warn">Stopped</dd>
+                      <dt>Grid</dt>
+                      <dd data-role="pub-grid">—</dd>
+                      <dt>IQ source</dt>
+                      <dd data-role="pub-iq-source">—</dd>
                       <dt class="status-dl-plotter-extra">Assembly → Raster input</dt>
                       <dd class="status-dl-plotter-extra" data-role="pub-pipeline-asm">—</dd>
                       <dt class="status-dl-plotter-extra">Raster → Encoder input</dt>
@@ -484,7 +505,11 @@
                       <dt>Publishing</dt>
                       <dd data-role="pub-publishing">—</dd>
                       <dt>Plotter (CUDA)</dt>
-                      <dd data-role="pub-cuda-plotter-status">Stopped</dd>
+                      <dd data-role="pub-cuda-plotter-status" data-state="warn">Stopped</dd>
+                      <dt>Grid</dt>
+                      <dd data-role="pub-grid">—</dd>
+                      <dt>IQ source</dt>
+                      <dd data-role="pub-iq-source">—</dd>
                       <dt class="status-dl-plotter-extra">Assembly → Raster input</dt>
                       <dd class="status-dl-plotter-extra" data-role="pub-pipeline-asm">—</dd>
                       <dt class="status-dl-plotter-extra">Raster → Encoder input</dt>

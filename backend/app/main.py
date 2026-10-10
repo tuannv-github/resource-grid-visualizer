@@ -64,6 +64,7 @@ CUDA_IQ_SYMBOLS = _env("CUDA_IQ_SYMBOLS", "14")
 # Filled from the first ZeroMQ resource-grid header when the plotter starts. Env values are only the fallback.
 _detected_iq_prb: Optional[int] = None
 _detected_iq_symbols: Optional[int] = None
+_iq_status_detail: str = ""
 # **START_SYMBOL** / **STOP_SYMBOL**: inclusive 0-based OFDM-symbol index range to render in the heatmap
 # (the producer still publishes the full slot; only the visualization is cropped horizontally).
 # Empty / unset → full slot ([0, CUDA_IQ_SYMBOLS-1]); passed to ``resgrid_plotter`` as ``--start-symbol`` /
@@ -154,13 +155,16 @@ def _peek_zmq_grid_dims(endpoint: str, timeout_ms: int = 5000) -> Optional[tuple
 
 
 def _refresh_grid_dims_from_zmq(endpoint: str) -> None:
-    global _detected_iq_prb, _detected_iq_symbols
+    global _detected_iq_prb, _detected_iq_symbols, _iq_status_detail
     if not endpoint.startswith(("ipc://", "tcp://", "inproc://")):
+        _iq_status_detail = ""
         return
     got = _peek_zmq_grid_dims(endpoint)
     if got is None:
+        _iq_status_detail = f"no ZeroMQ header on {endpoint}"
         return
     _detected_iq_prb, _detected_iq_symbols = got
+    _iq_status_detail = ""
     _log.info("grid size from ZeroMQ header prb=%s symbols=%s endpoint=%s", got[0], got[1], endpoint)
 
 
@@ -708,8 +712,17 @@ class PlotterStatus(BaseModel):
     stats: Optional[GenerationStats] = Field(None, description="Encode / pipeline counters (see **GET /api/plotter/status** OpenAPI on this route).")
     publish_rtsp: str = Field(description="Internal RTSP URL passed to **resgrid_plotter** / FFmpeg as the stream sink.")
     mtx_path: str = Field(description="MediaMTX path name for this stream.")
-    iq_prb: int = Field(description="PRB dimension (CUDA_IQ_PRB).")
-    iq_symbols: int = Field(description="Symbol dimension (CUDA_IQ_SYMBOLS).")
+    iq_prb: int = Field(description="PRB dimension used by the plotter (ZeroMQ header, else CUDA_IQ_PRB).")
+    iq_symbols: int = Field(description="Symbol dimension used by the plotter (ZeroMQ header, else CUDA_IQ_SYMBOLS).")
+    iq_endpoint: str = Field(default="", description="Resource-grid ZeroMQ address or POSIX mq name.")
+    iq_from_header: bool = Field(
+        default=False,
+        description="True when prb and symbols were taken from a ZeroMQ resource-grid header.",
+    )
+    iq_status_detail: str = Field(
+        default="",
+        description="Why the grid size is a fallback, empty when a header was received.",
+    )
     iq_symbol_start: int = Field(
         default=0,
         description=(
@@ -3132,6 +3145,9 @@ def api_plotter_status(request: Request):
         mtx_path=_mtx_path,
         iq_prb=grid_prb,
         iq_symbols=grid_symbols,
+        iq_endpoint=CUDA_IQ_MQ_PATH,
+        iq_from_header=_detected_iq_prb is not None and _detected_iq_symbols is not None,
+        iq_status_detail=_iq_status_detail,
         iq_symbol_start=sym_start,
         iq_symbol_stop=sym_stop,
         iq_producer_fps=plotter_shm_prod_hz,

@@ -75,6 +75,13 @@ export class ResgridPanel {
   private pubPipelineEnc: HTMLElement | null;
   private pubFrames: HTMLElement;
   private pubCudaPlotterStatus: HTMLElement;
+  private pubGrid: HTMLElement | null;
+  private pubIqSource: HTMLElement | null;
+  private mediaStatus: HTMLElement | null;
+  private mediaStatusPlotter: HTMLElement | null;
+  private mediaStatusGrid: HTMLElement | null;
+  private mediaStatusIq: HTMLElement | null;
+  private mediaStatusPlay: HTMLElement | null;
   private pubGenFapi: HTMLElement;
   private btnPlotterStart: HTMLButtonElement;
   private btnPlotterStop: HTMLButtonElement;
@@ -103,6 +110,13 @@ export class ResgridPanel {
     this.pubPipelineEnc = queryRole(this.controlsRoot, "pub-pipeline-enc");
     this.pubFrames = requireRole(this.controlsRoot, "pub-frames");
     this.pubCudaPlotterStatus = requireRole(this.controlsRoot, "pub-cuda-plotter-status");
+    this.pubGrid = queryRole(this.controlsRoot, "pub-grid");
+    this.pubIqSource = queryRole(this.controlsRoot, "pub-iq-source");
+    this.mediaStatus = queryRole(this.mediaRoot, "media-status");
+    this.mediaStatusPlotter = queryRole(this.mediaRoot, "media-status-plotter");
+    this.mediaStatusGrid = queryRole(this.mediaRoot, "media-status-grid");
+    this.mediaStatusIq = queryRole(this.mediaRoot, "media-status-iq");
+    this.mediaStatusPlay = queryRole(this.mediaRoot, "media-status-play");
     this.pubGenFapi = requireRole(this.controlsRoot, "pub-gen-fapi");
     this.btnPlotterStart = requireRole(this.controlsRoot, "btn-plotter-start");
     this.btnPlotterStop = requireRole(this.controlsRoot, "btn-plotter-stop");
@@ -122,6 +136,19 @@ export class ResgridPanel {
 
   private setPlaybackStatus(text: string): void {
     this.statusEl.textContent = text;
+    if (this.mediaStatusPlay) this.mediaStatusPlay.textContent = text;
+    const lower = text.toLowerCase();
+    let state = "warn";
+    if (/error|fail|cannot|not supported|blocked|invalid|network error|no stream/.test(lower)) state = "bad";
+    else if (
+      /live|subscribed|playing|started|updated|saved|preview|stopped|download started|was not running/.test(
+        lower,
+      )
+    ) {
+      state = "ok";
+    }
+    this.statusEl.dataset.state = state;
+    if (this.mediaStatus) this.mediaStatus.dataset.state = state;
   }
 
   private initModeSelect(): void {
@@ -265,7 +292,24 @@ export class ResgridPanel {
 
     this.pubPath.textContent = s.mtx_path;
     this.pubPublishing.textContent = s.generating ? "Yes" : "No";
+    this.pubPublishing.dataset.state = s.generating ? "ok" : "warn";
     this.pubCudaPlotterStatus.textContent = cudaPlotterUp ? "Running" : "Stopped";
+    this.pubCudaPlotterStatus.dataset.state = cudaPlotterUp ? "ok" : "warn";
+    const gridLabel = `${s.iq_prb ?? "—"} PRB × ${s.iq_symbols ?? "—"} symbols${
+      s.iq_from_header ? " (from header)" : s.iq_status_detail ? ` (${s.iq_status_detail})` : ""
+    }`;
+    const iqLabel = s.iq_endpoint?.trim() || "—";
+    if (this.pubGrid) this.pubGrid.textContent = gridLabel;
+    if (this.pubIqSource) this.pubIqSource.textContent = iqLabel;
+    if (this.mediaStatusPlotter) {
+      this.mediaStatusPlotter.textContent = cudaPlotterUp
+        ? s.generating
+          ? "Plotter running · publishing"
+          : "Plotter running · not publishing"
+        : "Plotter stopped";
+    }
+    if (this.mediaStatusGrid) this.mediaStatusGrid.textContent = gridLabel;
+    if (this.mediaStatusIq) this.mediaStatusIq.textContent = iqLabel;
     const st = s.stats ?? null;
     this.pubFrames.textContent = st?.frame != null ? String(st.frame) : "—";
     this.pubIqProducerFps.textContent =
@@ -474,6 +518,7 @@ export class ResgridPanel {
       }
     } else {
       this.pubPublishing.textContent = "—";
+      this.pubPublishing.removeAttribute("data-state");
       this.pubPath.textContent = "—";
       this.pubFrames.textContent = "—";
       this.pubIqProducerFps.textContent = "—";
@@ -483,6 +528,7 @@ export class ResgridPanel {
       this.btnGeneratorStop.disabled = true;
       this.pubGenFapi.textContent = "—";
       this.pubCudaPlotterStatus.textContent = "—";
+      this.pubCudaPlotterStatus.removeAttribute("data-state");
       this.videoAxes.dataset.iqVisible = "false";
       const legendUnk = queryRole<HTMLElement>(this.mediaRoot, "iq-legend-section");
       if (legendUnk) legendUnk.hidden = true;

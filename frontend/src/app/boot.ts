@@ -2,6 +2,7 @@ import { isPlaybackDebugEnabled } from "../config/debug";
 import { resolvePanels, type ResolvedGuiLayout } from "../config/panelLayout";
 import { ResgridPanel } from "../panel/ResgridPanel";
 import { mountSidebarToggle } from "../ui/sidebarToggle";
+import { mountShell } from "../ui/shell";
 
 const livePanels: ResgridPanel[] = [];
 
@@ -49,6 +50,12 @@ function prunePanelsNotInLayout(desiredMedia: Set<string>, desiredControls: Set<
   }
 }
 
+function siteLabel(mode: ResolvedGuiLayout["layoutMode"]): string {
+  if (mode === "rxnai" || mode === "ulnai") return "RX · NAI";
+  if (mode === "dlul") return "DL · UL";
+  return "Live";
+}
+
 function applyLayoutRootClasses(app: HTMLElement, cfg: ResolvedGuiLayout): void {
   app.classList.toggle("rg-app--dual", cfg.dual);
   app.classList.remove("rg-app--dlul", "rg-app--rxnai", "rg-app--ulnai", "rg-app--combine");
@@ -91,6 +98,7 @@ export function bootApp(): void {
   if (!app) return;
 
   applyLayoutRootClasses(app, cfg);
+  mountShell(app, siteLabel(cfg.layoutMode));
   syncDomToLayout(cfg);
   /* Mount before panels: applies persisted `rg-app--sidebar-hidden` synchronously so the dashboard
    * grid mounts in its final shape (no flash of full sidebar on reload). */
