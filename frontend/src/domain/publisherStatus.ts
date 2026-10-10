@@ -86,6 +86,13 @@ export type PublisherStatus = {
   capturer_jpeg_threads?: number | null;
 };
 
+export type MagScaleLegend = {
+  quantity: "linear_magnitude";
+  vmin: number;
+  vmax: number;
+  stops: { t: number; hex: string }[];
+};
+
 export type IqChannelLegendPayload = {
   channels: {
     id: number;
@@ -95,6 +102,7 @@ export type IqChannelLegendPayload = {
   }[];
   channel_zero_note: string;
   render_note: string;
+  magnitude: MagScaleLegend;
 };
 
 export type PlaybackUrls = {

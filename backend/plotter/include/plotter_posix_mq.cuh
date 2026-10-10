@@ -42,6 +42,12 @@ class ResgridMqStreamIn {
   /** Dimensions from the most recently completed logical frame; 0 if unknown. */
   virtual uint16_t last_frame_prb() const { return last_frame_prb_; }
   virtual uint16_t last_frame_symbols() const { return last_frame_symbols_; }
+  /** SFN and slot index within that SFN from the latest frame header. False when the header has neither. */
+  virtual bool last_frame_timing(uint16_t& sfn, uint16_t& slot) const {
+    (void)sfn;
+    (void)slot;
+    return false;
+  }
 
  private:
   bool pump_one_logical_frame();
@@ -72,7 +78,7 @@ bool resgrid_mq_send_frame(int wq, const void* data, size_t len, uint32_t frame_
 
 /**
  * Resource-grid IQ over ZeroMQ SUB. ``path`` is a full address (``ipc://`` or ``tcp://``).
- * Each message is two parts: a text header (``resgrid_nai seq=1 prb=133 symbols=14 bytes=N``) and raw float32 IQ.
+ * Each message is two parts: a text header (``resgrid_nai seq=1 prb=133 symbols=14 bytes=N sfn=512 slot=7``) and raw float32 IQ.
  * Images and FAPI stay on POSIX mq.
  */
 class ResgridZmqStreamIn : public ResgridMqStreamIn {
@@ -85,6 +91,12 @@ class ResgridZmqStreamIn : public ResgridMqStreamIn {
   bool ok() const override { return ok_; }
   uint16_t last_frame_prb() const override { return prb_; }
   uint16_t last_frame_symbols() const override { return symbols_; }
+  bool last_frame_timing(uint16_t& sfn, uint16_t& slot) const override {
+    if (!has_timing_) return false;
+    sfn = sfn_;
+    slot = slot_;
+    return true;
+  }
 
  private:
   struct Impl;
@@ -93,6 +105,9 @@ class ResgridZmqStreamIn : public ResgridMqStreamIn {
   size_t pending_off_ = 0;
   uint16_t prb_ = 0;
   uint16_t symbols_ = 0;
+  uint16_t sfn_ = 0;
+  uint16_t slot_ = 0;
+  bool has_timing_ = false;
   bool ok_ = false;
 
   bool pump_one_frame();

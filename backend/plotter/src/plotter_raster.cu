@@ -527,6 +527,23 @@ void render_frame_rgba(const GridFrame& gf, float2* d_z, float* d_mag, uint8_t* 
     overlay_chan_region_labels_on_rgba(h_rgba.data(), frame_w, frame_h, gf.chan, gf.cell_rnti, prb, sym, sym_start,
                                        sym_count, off_x, off_y, content_w, content_h);
   }
+  if (gf.has_timing) {
+    char timing[48];
+    std::snprintf(timing, sizeof(timing), "SFN %u SLOT %u", static_cast<unsigned>(gf.sfn), static_cast<unsigned>(gf.slot));
+    const int scale = 2;
+    const int adv = 8 * scale + scale;
+    const int tw = static_cast<int>(std::strlen(timing)) * adv;
+    const int pad = 4;
+    const int box_w = tw + 2 * pad;
+    const int box_h = 8 * scale + 2 * pad;
+    const int x0 = 8;
+    const int y0 = 8;
+    for (int yy = y0; yy < y0 + box_h && yy < frame_h; ++yy) {
+      for (int xx = x0; xx < x0 + box_w && xx < frame_w; ++xx)
+        rgba_blend_over(h_rgba.data(), frame_w, frame_h, xx, yy, 8, 8, 16, 200);
+    }
+    draw_text_line(h_rgba.data(), frame_w, frame_h, x0 + pad, y0 + pad, timing, scale, 252, 252, 245);
+  }
 }
 
 void fill_synthetic_iq(std::vector<float2>& out, std::vector<uint8_t>& chan, std::vector<uint32_t>& cell_rnti,

@@ -10,7 +10,9 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -29,7 +31,15 @@ std::string connect_endpoint(const char* bind_addr)
   return bind;
 }
 
-bool parse_header(const zmq::message_t& hdr, uint16_t& prb, uint16_t& symbols)
+struct ParsedResgridHeader {
+  uint16_t prb = 0;
+  uint16_t symbols = 0;
+  uint16_t sfn = 0;
+  uint16_t slot = 0;
+  bool has_timing = false;
+};
+
+bool parse_header(const zmq::message_t& hdr, ParsedResgridHeader& out)
 {
   const std::string text(static_cast<const char*>(hdr.data()), hdr.size());
   unsigned seq = 0;
@@ -39,8 +49,29 @@ bool parse_header(const zmq::message_t& hdr, uint16_t& prb, uint16_t& symbols)
   char topic[80] = {};
   if (std::sscanf(text.c_str(), "%79s seq=%u prb=%u symbols=%u bytes=%lu", topic, &seq, &p, &s, &nbytes) < 4)
     return false;
-  prb = static_cast<uint16_t>(p);
-  symbols = static_cast<uint16_t>(s);
+  out.prb = static_cast<uint16_t>(p);
+  out.symbols = static_cast<uint16_t>(s);
+  bool got_sfn = false;
+  bool got_slot = false;
+  std::istringstream iss(text);
+  std::string tok;
+  while (iss >> tok) {
+    const auto eq = tok.find('=');
+    if (eq == std::string::npos || eq + 1 >= tok.size()) continue;
+    const std::string key = tok.substr(0, eq);
+    const std::string val = tok.substr(eq + 1);
+    char* end = nullptr;
+    const unsigned long n = std::strtoul(val.c_str(), &end, 10);
+    if (end == val.c_str() || n > 65535ul) continue;
+    if (key == "sfn") {
+      out.sfn = static_cast<uint16_t>(n);
+      got_sfn = true;
+    } else if (key == "slot") {
+      out.slot = static_cast<uint16_t>(n);
+      got_slot = true;
+    }
+  }
+  out.has_timing = got_sfn && got_slot;
   return true;
 }
 
@@ -65,17 +96,10 @@ bool resgrid_zmq_peek_grid_dims(const char* endpoint, int timeout_ms, int* prb, 
     if (!sock.get(zmq::sockopt::rcvmore)) return false;
     zmq::message_t body;
     if (!sock.recv(body, zmq::recv_flags::none)) return false;
-    const std::string text(static_cast<const char*>(header.data()), header.size());
-    unsigned seq = 0;
-    unsigned p = 0;
-    unsigned s = 0;
-    unsigned long nbytes = 0;
-    char topic[80] = {};
-    if (std::sscanf(text.c_str(), "%79s seq=%u prb=%u symbols=%u bytes=%lu", topic, &seq, &p, &s, &nbytes) < 4)
-      return false;
-    if (p < 1 || s < 1) return false;
-    *prb = static_cast<int>(p);
-    *symbols = static_cast<int>(s);
+    ParsedResgridHeader parsed;
+    if (!parse_header(header, parsed) || parsed.prb < 1 || parsed.symbols < 1) return false;
+    *prb = static_cast<int>(parsed.prb);
+    *symbols = static_cast<int>(parsed.symbols);
     return true;
   } catch (const zmq::error_t& e) {
     fprintf(stderr, "resgrid_plotter: ZeroMQ grid-size peek failed: %s\n", e.what());
@@ -103,6 +127,9 @@ bool ResgridZmqStreamIn::open_read(const char* path)
   pending_off_ = 0;
   prb_ = 0;
   symbols_ = 0;
+  sfn_ = 0;
+  slot_ = 0;
+  has_timing_ = false;
   const std::string endpoint = connect_endpoint(path);
   if (endpoint.rfind("ipc://", 0) != 0 && endpoint.rfind("tcp://", 0) != 0 && endpoint.rfind("inproc://", 0) != 0) {
     std::fprintf(stderr, "resgrid_plotter: IQ ZeroMQ address must be ipc:// or tcp:// (got %s)\n", path ? path : "(null)");
@@ -139,11 +166,21 @@ bool ResgridZmqStreamIn::pump_one_frame()
       if (first.more()) {
         const auto got_body = impl_->sub.recv(body, zmq::recv_flags::none);
         if (!got_body) return false;
-        uint16_t prb = 0;
-        uint16_t symbols = 0;
-        if (parse_header(first, prb, symbols)) {
-          prb_ = prb;
-          symbols_ = symbols;
+        ParsedResgridHeader parsed;
+        if (parse_header(first, parsed)) {
+          prb_ = parsed.prb;
+          symbols_ = parsed.symbols;
+          has_timing_ = parsed.has_timing;
+          if (parsed.has_timing) {
+            sfn_ = parsed.sfn;
+            slot_ = parsed.slot;
+            static int timing_logs = 0;
+            if (timing_logs < 8) {
+              ++timing_logs;
+              std::fprintf(stderr, "resgrid_plotter: IQ header sfn=%u slot=%u\n",
+                           static_cast<unsigned>(sfn_), static_cast<unsigned>(slot_));
+            }
+          }
         }
         bytes = body.data();
         nbytes = body.size();

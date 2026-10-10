@@ -1,6 +1,59 @@
-import type { IqChannelLegendPayload } from "../domain/publisherStatus";
+import type { IqChannelLegendPayload, MagScaleLegend } from "../domain/publisherStatus";
 import { plainLegendNote } from "../lib/format";
 import { queryRole } from "./dom";
+
+function formatMag(v: number): string {
+  if (!Number.isFinite(v)) return "—";
+  const a = Math.abs(v);
+  if (a !== 0 && (a < 0.01 || a >= 1000)) return v.toExponential(1);
+  if (a >= 10) return v.toFixed(1);
+  return v.toFixed(2);
+}
+
+/** Vertical Viridis bar for the fixed linear-magnitude scale (`0` … `mag_scale`). */
+export function renderMagnitudeScale(root: Element, magnitude: MagScaleLegend | undefined): void {
+  const host = queryRole<HTMLElement>(root, "va-mag-scale");
+  const bar = queryRole<HTMLElement>(root, "va-mag-bar");
+  const ticks = queryRole<HTMLElement>(root, "va-mag-ticks");
+  const caption = queryRole<HTMLElement>(root, "va-mag-caption");
+  if (!host || !bar || !ticks) return;
+
+  const stops = magnitude?.stops?.filter((s) => Number.isFinite(s.t) && typeof s.hex === "string") ?? [];
+  const vmin = magnitude?.vmin;
+  const vmax = magnitude?.vmax;
+  if (
+    !magnitude ||
+    stops.length < 2 ||
+    vmin == null ||
+    vmax == null ||
+    !Number.isFinite(vmin) ||
+    !Number.isFinite(vmax) ||
+    !(vmax > vmin)
+  ) {
+    host.hidden = true;
+    if (caption) caption.hidden = true;
+    return;
+  }
+
+  const ordered = [...stops].sort((a, b) => a.t - b.t);
+  bar.style.backgroundImage = `linear-gradient(to top, ${ordered
+    .map((s) => `${s.hex} ${(s.t * 100).toFixed(2)}%`)
+    .join(", ")})`;
+  const label = `Linear magnitude |I+jQ|, ${formatMag(vmin)} to ${formatMag(vmax)}. Values above the top stay at the top color.`;
+  host.setAttribute("aria-label", label);
+  bar.title = label;
+
+  ticks.replaceChildren();
+  for (const frac of [0, 0.5, 1]) {
+    const span = document.createElement("span");
+    span.textContent = formatMag(vmin + (vmax - vmin) * frac);
+    span.style.bottom = `${frac * 100}%`;
+    ticks.appendChild(span);
+  }
+
+  host.hidden = false;
+  if (caption) caption.hidden = false;
+}
 
 /** Logical ids from OAI / plotter pairing: DL 1,3,5,7 · UL 2,4,6,8 */
 const LEGEND_DL_IDS = new Set([1, 3, 5, 7]);

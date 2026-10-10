@@ -1125,6 +1125,25 @@ class FapiChanLegendEntry(BaseModel):
     hex: str = Field(..., description='CSS sRGB "#rrggbb" for the base tint.')
 
 
+class MagScaleStop(BaseModel):
+    """One Viridis sample. ``t = 0`` is ``vmin`` (bottom of the bar); ``t = 1`` is ``vmax``."""
+
+    t: float = Field(..., ge=0.0, le=1.0)
+    hex: str = Field(..., description='CSS sRGB "#rrggbb".')
+
+
+class MagScaleLegend(BaseModel):
+    """Fixed colormap range used by ``rgba_frame_kernel``: ``clamp(hypot(I, Q) / vmax, 0, 1)``."""
+
+    quantity: Literal["linear_magnitude"] = "linear_magnitude"
+    vmin: float = Field(0.0, description="Linear magnitude at the bottom of the bar (always 0).")
+    vmax: float = Field(..., gt=0, description="``CUDA_IQ_MAG_SCALE`` / plotter ``--mag-scale``. Values above this stay yellow.")
+    stops: list[MagScaleStop] = Field(
+        ...,
+        description="Viridis samples from the plotter LUT, ordered from low magnitude to high.",
+    )
+
+
 class FapiChannelLegendResponse(BaseModel):
     channels: list[FapiChanLegendEntry] = Field(
         ...,
@@ -1138,6 +1157,59 @@ class FapiChannelLegendResponse(BaseModel):
         ...,
         description="Optional legend footnote on tint vs magnitude (may be empty).",
     )
+    magnitude: MagScaleLegend = Field(
+        ...,
+        description="Static linear-magnitude color bar (same scale on every frame).",
+    )
+
+
+_VIRIDIS_LUT_PATH = Path(__file__).resolve().parents[1] / "plotter" / "include" / "viridis_lut.inc"
+_VIRIDIS_STOP_INDEX = (0, 32, 64, 96, 128, 160, 192, 224, 255)
+# Indices above, sampled from ``kViridis256``. Used when the plotter include is not mounted
+# (the runtime image ships the plotter binary only; compose bind-mounts ``backend/app``).
+_VIRIDIS_STOPS_FALLBACK: tuple[tuple[float, str], ...] = (
+    (0.0, "#440154"),
+    (32 / 255.0, "#472d7b"),
+    (64 / 255.0, "#3b528b"),
+    (96 / 255.0, "#2c728e"),
+    (128 / 255.0, "#21918c"),
+    (160 / 255.0, "#28ae80"),
+    (192 / 255.0, "#5ec962"),
+    (224 / 255.0, "#addc30"),
+    (1.0, "#fde725"),
+)
+
+
+def _mag_scale_vmax() -> float:
+    try:
+        v = float(CUDA_IQ_MAG_SCALE)
+    except ValueError:
+        return 1.0
+    if not math.isfinite(v) or v <= 0.0:
+        return 1.0
+    return v
+
+
+def _viridis_stops() -> list[MagScaleStop]:
+    """Sample ``kViridis256`` so the UI bar matches ``viridis_rgb`` in the plotter."""
+    if _VIRIDIS_LUT_PATH.is_file():
+        triples = re.findall(
+            r"\{([0-9.]+)f,([0-9.]+)f,([0-9.]+)f\}",
+            _VIRIDIS_LUT_PATH.read_text(encoding="utf-8"),
+        )
+        if len(triples) >= 256:
+            stops: list[MagScaleStop] = []
+            for i in _VIRIDIS_STOP_INDEX:
+                fr, fg, fb = (float(x) for x in triples[i])
+                r = int(round(max(0.0, min(1.0, fr)) * 255.0))
+                g = int(round(max(0.0, min(1.0, fg)) * 255.0))
+                b = int(round(max(0.0, min(1.0, fb)) * 255.0))
+                stops.append(MagScaleStop(t=i / 255.0, hex=f"#{r:02x}{g:02x}{b:02x}"))
+            return stops
+    return [MagScaleStop(t=t, hex=h) for t, h in _VIRIDIS_STOPS_FALLBACK]
+
+
+_VIRIDIS_STOPS = _viridis_stops()
 
 
 def _fapi_channel_legend_payload() -> FapiChannelLegendResponse:
@@ -1165,6 +1237,7 @@ def _fapi_channel_legend_payload() -> FapiChannelLegendResponse:
         channels=channels,
         channel_zero_note="",
         render_note="",
+        magnitude=MagScaleLegend(vmin=0.0, vmax=_mag_scale_vmax(), stops=_VIRIDIS_STOPS),
     )
 
 
@@ -2955,7 +3028,9 @@ def api_generator_patterns_list():
     summary="FAPI channel legend",
     description=(
         "Static legend matching **`resgrid_plotter`** CUDA `channel_tint_rgb` "
-        "(PHY ids **1…8**, labels, and base sRGB). Does not require a running plotter."
+        "(PHY ids **1…8**, labels, and base sRGB) plus the linear-magnitude color bar "
+        "(**`magnitude.vmin`** = 0, **`magnitude.vmax`** = **`CUDA_IQ_MAG_SCALE`**, Viridis **`stops`**). "
+        "Does not require a running plotter."
     ),
 )
 def api_generator_channel_legend():

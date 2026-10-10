@@ -108,6 +108,10 @@ struct GridFrame {
   std::vector<uint8_t> chan;
   /** Per-cell RNTI when present (slot FIFO); empty => region labels are PHY name only. */
   std::vector<uint32_t> cell_rnti;
+  /** Set when the ZeroMQ header carried ``sfn=`` and ``slot=`` (slot index within that SFN). */
+  bool has_timing = false;
+  uint16_t sfn = 0;
+  uint16_t slot = 0;
 };
 
 /** Last completed slot's per-cell PHY metadata; reapplied to IQ sidecar frames so display does not alternate tint vs Viridis. */

@@ -693,19 +693,20 @@ body {
 
 .video-axes[data-iq-visible="true"] {
   /*
-   * Left column is the PRB axis. A matching empty column on the right keeps the
-   * heatmap centered, so the two plots stay symmetric.
-   * 6rem = two 2.5rem axis columns + two 0.5rem gaps.
+   * Left column is the PRB axis. The right column is the linear-magnitude color bar.
    */
   --iq-axis: 2.5rem;
+  --iq-cbar: 3.25rem;
+  /* PRB column + color bar + the two 0.5rem column gaps. */
+  --iq-chrome: calc(var(--iq-axis) + var(--iq-cbar) + 1rem);
   --iq-plot-size: max(
     0px,
     min(
-      max(0px, calc(100% - 6rem)),
+      max(0px, calc(100% - var(--iq-chrome))),
       min(92vmin, max(0px, calc(100vh - 11rem)))
     )
   );
-  grid-template-columns: var(--iq-axis) minmax(0, var(--iq-plot-size)) var(--iq-axis);
+  grid-template-columns: var(--iq-axis) minmax(0, var(--iq-plot-size)) var(--iq-cbar);
   grid-template-rows: auto auto auto;
   align-content: center;
   justify-content: center;
@@ -770,8 +771,8 @@ body {
     --iq-plot-size: max(
       0px,
       min(
-        max(0px, calc(100% - 6rem)),
-        max(0px, 100cqi - 6rem),
+        max(0px, calc(100% - var(--iq-chrome))),
+        max(0px, 100cqi - var(--iq-chrome)),
         92vmin,
         max(0px, calc(100vh - 11rem))
       )
@@ -779,13 +780,13 @@ body {
   }
 
   /* Figure is the size container: 100cqh is the space under the title, not the whole card.
-   * 1.75rem leaves the symbol label and tick row. 6rem is both axis columns plus gaps.
+   * 1.75rem leaves the symbol label and tick row. --iq-chrome is the PRB column, color bar, and gaps.
    * Clamp at 0 so a narrow card cannot feed a negative size into the grid. */
   .layout-media--solo .video-axes[data-iq-visible="true"] {
     --iq-plot-size: max(
       1px,
       min(
-        max(0px, calc(100cqi - 6rem)),
+        max(0px, calc(100cqi - var(--iq-chrome))),
         max(0px, calc(100cqh - 1.75rem)),
         92vmin
       )
@@ -873,6 +874,68 @@ body {
   color: var(--text-faint);
   line-height: 1.2;
   text-align: right;
+}
+
+/* Linear |I+jQ| color bar. Hidden until the legend payload arrives, and hidden for synthetic video. */
+.va-mag-scale,
+.va-mag-caption {
+  display: none;
+}
+
+.video-axes[data-iq-visible="true"] .va-mag-scale:not([hidden]) {
+  grid-column: 3;
+  grid-row: 2;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 0.28rem;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+
+.va-mag-bar {
+  width: 0.7rem;
+  flex: 0 0 0.7rem;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-sizing: border-box;
+}
+
+.va-mag-ticks {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.va-mag-ticks span {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  transform: translateY(50%);
+  font-size: 0.62rem;
+  line-height: 1;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.va-mag-ticks span:first-child {
+  transform: none;
+}
+
+.va-mag-ticks span:last-child {
+  transform: translateY(100%);
+}
+
+.video-axes[data-iq-visible="true"] .va-mag-caption:not([hidden]) {
+  display: block;
+  grid-column: 3;
+  grid-row: 3;
+  font-size: 0.58rem;
+  color: var(--text-faint);
+  line-height: 1.2;
+  padding-left: 0.05rem;
 }
 
 .va-video-wrap {

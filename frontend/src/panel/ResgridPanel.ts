@@ -18,7 +18,7 @@ import type { PublisherStatus } from "../domain/publisherStatus";
 import { MediaPlayback } from "../playback/mediaPlayback";
 import { queryRole, requireRole } from "../ui/dom";
 import { renderIqAxes } from "../ui/iqAxes";
-import { renderIqChannelLegend, renderIqLegendError } from "../ui/iqLegend";
+import { renderIqChannelLegend, renderIqLegendError, renderMagnitudeScale } from "../ui/iqLegend";
 import { mountModeSelect } from "../ui/modeSelect";
 
 /** One **SyntheticMqWriterStatus** slice from **GET /api/generator/status**. */
@@ -201,13 +201,18 @@ export class ResgridPanel {
     const dlList = queryRole<HTMLElement>(this.mediaRoot, "iq-legend-list-dl");
     const ulList = queryRole<HTMLElement>(this.mediaRoot, "iq-legend-list-ul");
     const notes = queryRole<HTMLElement>(this.mediaRoot, "iq-legend-notes");
-    if (!section || !dlList || !ulList || !notes) return;
 
     const result = await this.api.getIqChannelLegend(logPlayback);
     if (result.ok) {
-      renderIqChannelLegend(this.mediaRoot, result.payload);
+      renderMagnitudeScale(this.mediaRoot, result.payload.magnitude);
+      if (section && dlList && ulList && notes) {
+        renderIqChannelLegend(this.mediaRoot, result.payload);
+      }
     } else {
-      renderIqLegendError(this.mediaRoot, result.message);
+      renderMagnitudeScale(this.mediaRoot, undefined);
+      if (section && dlList && ulList && notes) {
+        renderIqLegendError(this.mediaRoot, result.message);
+      }
     }
   }
 

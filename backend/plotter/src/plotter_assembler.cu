@@ -335,6 +335,13 @@ bool read_one_external_iq_frame(ResgridMqStreamIn* mq, int ncells, GridFrame& gf
   gf.chan.assign((size_t)ncells, 0);
   gf.cell_rnti.clear();
   if (!mq->read_exact(gf.iq.data(), (size_t)ncells * sizeof(float2), "iq-mq full-grid payload")) return false;
+  uint16_t sfn = 0;
+  uint16_t slot = 0;
+  if (mq->last_frame_timing(sfn, slot)) {
+    gf.has_timing = true;
+    gf.sfn = sfn;
+    gf.slot = slot;
+  }
   const uint16_t hp = mq->last_frame_prb();
   const uint16_t hs = mq->last_frame_symbols();
   if (hp > 0u && hs > 0u) {
