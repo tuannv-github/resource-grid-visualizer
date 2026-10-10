@@ -255,6 +255,24 @@ export class MediaPlayback {
     return this.buildPlaybackUrlsForHost(h);
   }
 
+  /** Signaling URLs follow the page host so a baked LAN address is not required. */
+  private alignPlaybackHostToPage(urls: PlaybackUrls): PlaybackUrls {
+    if (typeof window === "undefined" || !window.location.hostname) return urls;
+    const fix = (raw: string, port: string): string => {
+      const u = new URL(raw);
+      u.hostname = window.location.hostname;
+      if (window.location.protocol === "http:" || window.location.protocol === "https:") {
+        u.protocol = window.location.protocol;
+      }
+      u.port = port;
+      return u.toString();
+    };
+    return {
+      hls: fix(urls.hls, "8888"),
+      webrtc_whep: fix(urls.webrtc_whep, "8889"),
+    };
+  }
+
   private async resolvePlaybackUrls(): Promise<PlaybackUrls | null> {
     const base = this.api.baseUrl;
     const apiUrl = `${base}/api/plotter/playback`;
@@ -266,8 +284,9 @@ export class MediaPlayback {
         if (j.hls && j.webrtc_whep) {
           const fromApi = { hls: j.hls, webrtc_whep: j.webrtc_whep };
           if (this.urlsMatchPlaybackPath(fromApi)) {
-            this.logPlayback("playback (from API)", fromApi);
-            return fromApi;
+            const aligned = this.alignPlaybackHostToPage(fromApi);
+            this.logPlayback("playback (from API)", aligned);
+            return aligned;
           }
           this.logPlayback(
             "playback API path mismatch for",
@@ -275,7 +294,7 @@ export class MediaPlayback {
             "— using MediaMTX fallback URLs",
             fromApi,
           );
-          const corrected = this.buildPlaybackUrlsForHost(fromApi.hls);
+          const corrected = this.alignPlaybackHostToPage(this.buildPlaybackUrlsForHost(fromApi.hls));
           this.logPlayback("playback (path-corrected from API host)", corrected);
           return corrected;
         }
@@ -288,8 +307,10 @@ export class MediaPlayback {
     }
 
     const fb = this.buildFallbackPlaybackUrls();
-    if (fb) this.logPlayback("playback (fallback)", fb);
-    return fb;
+    if (!fb) return null;
+    const aligned = this.alignPlaybackHostToPage(fb);
+    this.logPlayback("playback (fallback)", aligned);
+    return aligned;
   }
 
   private releaseWebRtcInboundMediaStream(): void {

@@ -58,24 +58,24 @@ function resolveGuiModeEnv(): GuiModeEnv {
 }
 
 /**
- * If the UI is opened from a LAN host (e.g. http://10.1.101.34:5173) but VITE_* still points at
- * localhost/127.0.0.1, rewrite the API hostname so /docs and fetch() hit the same machine as the page.
+ * API calls use the host that served this page, keeping the configured port.
+ * Opening the UI at any address (localhost, a LAN IP, or a hostname) reaches the backends on that same host.
  */
-function rewriteLoopbackApiBaseToPageHost(apiBase: string): string {
+function rewriteApiBaseToPageHost(apiBase: string): string {
   const base = apiBase.trim().replace(/\/$/, "");
-  if (typeof window === "undefined") return base;
+  if (!base || typeof window === "undefined") return base;
   try {
     const u = new URL(base);
-    const loopback = u.hostname === "localhost" || u.hostname === "127.0.0.1";
     const h = window.location.hostname;
-    if (loopback && h && h !== "localhost" && h !== "127.0.0.1") {
-      u.hostname = h;
-      return u.toString().replace(/\/$/, "");
+    if (!h) return base;
+    u.hostname = h;
+    if (window.location.protocol === "http:" || window.location.protocol === "https:") {
+      u.protocol = window.location.protocol;
     }
+    return u.toString().replace(/\/$/, "");
   } catch {
-    /* leave base unchanged */
+    return base;
   }
-  return base;
 }
 
 function singleApiBase(): string {
@@ -87,7 +87,7 @@ function singleApiBase(): string {
     (typeof window !== "undefined"
       ? `${window.location.protocol}//${window.location.hostname}:8081`
       : "http://localhost:8081");
-  return rewriteLoopbackApiBaseToPageHost(raw);
+  return rewriteApiBaseToPageHost(raw);
 }
 
 function dualPanels(dl: string, ul: string): PanelBoot[] {
@@ -95,7 +95,7 @@ function dualPanels(dl: string, ul: string): PanelBoot[] {
     {
       id: "panel-dl-media",
       controlsRootId: "panel-dl-controls",
-      apiBase: rewriteLoopbackApiBaseToPageHost(dl),
+      apiBase: rewriteApiBaseToPageHost(dl),
       playbackPath: "live_dl",
       modeSelectId: "mode-select-dl",
       heading: "Downlink",
@@ -103,7 +103,7 @@ function dualPanels(dl: string, ul: string): PanelBoot[] {
     {
       id: "panel-ul-media",
       controlsRootId: "panel-ul-controls",
-      apiBase: rewriteLoopbackApiBaseToPageHost(ul),
+      apiBase: rewriteApiBaseToPageHost(ul),
       playbackPath: "live_ul",
       modeSelectId: "mode-select-ul",
       heading: "Uplink",
@@ -125,7 +125,7 @@ function rxNaiPanels(rx: string, nai: string): PanelBoot[] {
     {
       id: "panel-ul-media",
       controlsRootId: "panel-ul-controls",
-      apiBase: rewriteLoopbackApiBaseToPageHost(rx),
+      apiBase: rewriteApiBaseToPageHost(rx),
       playbackPath: paths.rx,
       modeSelectId: "mode-select-ul",
       heading: "RX",
@@ -133,7 +133,7 @@ function rxNaiPanels(rx: string, nai: string): PanelBoot[] {
     {
       id: "panel-nai-media",
       controlsRootId: "panel-nai-controls",
-      apiBase: rewriteLoopbackApiBaseToPageHost(nai),
+      apiBase: rewriteApiBaseToPageHost(nai),
       playbackPath: paths.nai,
       modeSelectId: "mode-select-nai",
       heading: "NAI",

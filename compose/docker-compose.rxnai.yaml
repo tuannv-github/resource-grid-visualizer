@@ -1,14 +1,14 @@
 # RX + NAI stack: MediaMTX (live_rx / live_nai) + two FastAPI backends (:8082 RX, :8083 NAI) + Vite frontend.
 # Grid width and height come from the first ZeroMQ resource-grid header (prb, symbols).
 #
-# Env file (required for LAN WebRTC video): copy and edit host IP
+# Env file: copy if you need to override defaults
 #   cp compose/.env.example compose/.env
 # Run from resource-grid-visualizer/:
 #   docker compose -f compose/docker-compose.rxnai.yaml up
 # Or from compose/ (`.env` in cwd):
 #   docker compose -f docker-compose.rxnai.yaml up
 #
-# Set MTX_WEBRTC_ADDITIONAL_HOSTS in compose/.env to this machine's LAN IP (as browsers reach it).
+# The UI and WebRTC use the host the browser opened. No LAN IP is required.
 #
 # Resource-grid IQ is a full ZeroMQ address. nv-cubb uses host network and binds
 # tcp://0.0.0.0:15556 (RX) and :15557 (NAI). Plotters connect through the host gateway.
@@ -48,8 +48,8 @@ services:
     environment:
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,video,utility}
-      MTX_RTSP_URL: rtsp://mediamtx:8554/live_rx
-      MTX_WAIT_HOST: mediamtx
+      MTX_RTSP_URL: rtsp://host.docker.internal:8554/live_rx
+      MTX_WAIT_HOST: host.docker.internal
       MTX_WAIT_PORT: "8554"
       AUTO_START: ${AUTO_START_RX:-1}
       CUDA_AUTO_START_IQ_GENERATOR: ${CUDA_AUTO_START_IQ_GENERATOR:-0}
@@ -141,8 +141,8 @@ services:
     environment:
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,video,utility}
-      MTX_RTSP_URL: rtsp://mediamtx:8554/live_nai
-      MTX_WAIT_HOST: mediamtx
+      MTX_RTSP_URL: rtsp://host.docker.internal:8554/live_nai
+      MTX_WAIT_HOST: host.docker.internal
       MTX_WAIT_PORT: "8554"
       AUTO_START: ${AUTO_START:-1}
       CUDA_AUTO_START_IQ_GENERATOR: ${CUDA_AUTO_START_IQ_GENERATOR:-0}
@@ -221,6 +221,7 @@ services:
       VITE_PLAYBACK_MODE: ${VITE_PLAYBACK_MODE:-webrtc}
       VITE_API_RELATIVE: "0"
       VITE_DEV_PROXY_TARGET: ""
+      # Ports only. The page host replaces whatever hostname is baked in here.
       VITE_API_BASE_RX: ${VITE_API_BASE_RX:-http://localhost:8082}
       VITE_API_BASE_NAI: ${VITE_API_BASE_NAI:-http://localhost:8083}
       VITE_GUI_MODE: ${VITE_GUI_MODE:-rxnai}

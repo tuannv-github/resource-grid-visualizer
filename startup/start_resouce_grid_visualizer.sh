@@ -12,7 +12,7 @@ ENV_FILE="${COMPOSE_DIR}/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
   cp "${COMPOSE_DIR}/.env.example" "$ENV_FILE"
   echo "Created ${ENV_FILE} from .env.example"
-  echo "Set MTX_WEBRTC_ADDITIONAL_HOSTS in that file to this machine's LAN IP before opening the UI from another computer."
+  echo "Open the UI at this machine's address, port 5173. No LAN IP has to be written into compose/.env."
 fi
 
 cd "$COMPOSE_DIR"
