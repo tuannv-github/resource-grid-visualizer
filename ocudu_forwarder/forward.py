@@ -31,13 +31,26 @@ def env_int(name: str, default: int) -> int:
 
 
 def cbf16_grid(payload: bytes, shape: tuple[int, ...]) -> np.ndarray:
+    """Decode a joint-capture CBF16 tensor into complex64.
+
+    Each complex sample is two little-endian brain-float16 values (real, then
+    imag). Shifting the 16-bit pattern into the high half of a float32 recovers
+    the value; the low 16 bits of a brain float are defined to be zero.
+    """
     components = (np.frombuffer(payload, "<u2").astype("<u4") << 16).view("<f4")
     iq = components[::2] + 1j * components[1::2]
+    # ul.grid shape is [rx_port, symbol, subcarrier], subcarrier fastest.
     return iq.reshape(shape)
 
 
 def to_plotter_frame(iq: np.ndarray, antenna: int) -> tuple[bytes, int, int]:
-    """Reduce [rx_port, symbol, subcarrier] to one float32 re/im sample per PRB."""
+    """Reduce [rx_port, symbol, subcarrier] to one float32 re/im sample per PRB.
+
+    The plotter draws one cell per PRB, not per subcarrier. 133 PRB on this
+    carrier is 1596 subcarriers (133 * 12). Leftover tones that do not fill a
+    PRB are dropped. The flat index the plotter reads is symbol-major:
+    flat = symbol * prb + prb_index.
+    """
     if iq.ndim != 3:
         raise ValueError(f"ul.grid rank {iq.ndim} is not [port, symbol, subcarrier]")
     ports, symbols, subcarriers = iq.shape
@@ -46,14 +59,18 @@ def to_plotter_frame(iq: np.ndarray, antenna: int) -> tuple[bytes, int, int]:
         raise ValueError(f"ul.grid shape {iq.shape} has no PRBs")
     tones = iq[:, :, : prb * 12].reshape(ports, symbols, prb, 12)
     if antenna < 0:
+        # Same as CUPHY_RESGRID_ANTENNA=-1: RMS across every port and tone.
+        # Imaginary part stays 0 so the heatmap is magnitude only.
         magnitude = np.sqrt(np.mean(np.abs(tones) ** 2, axis=(0, 3))).astype(np.float32)
         real = magnitude.reshape(-1)
         imag = np.zeros_like(real)
     else:
+        # One RX port. Mean of the 12 subcarriers, matching cuPHY's coherent average.
         port = antenna if antenna < ports else 0
         mean = tones[port].mean(axis=-1)
         real = np.ascontiguousarray(mean.real, dtype=np.float32).reshape(-1)
         imag = np.ascontiguousarray(mean.imag, dtype=np.float32).reshape(-1)
+    # Interleaved re, im. One cell is 8 bytes, so a 133 x 14 grid is 14,896 bytes.
     frame = np.empty(real.size * 2, dtype=np.float32)
     frame[0::2] = real
     frame[1::2] = imag
@@ -61,6 +78,14 @@ def to_plotter_frame(iq: np.ndarray, antenna: int) -> tuple[bytes, int, int]:
 
 
 class RxPublisher:
+    """ZeroMQ PUB the RX plotter subscribes to.
+
+    The plotter connects to tcp://host.docker.internal:15556 and parses the
+    first frame with sscanf: "resgrid_rx seq=%u prb=%u symbols=%u bytes=%lu",
+    then optional sfn= and slot=. SNDHWM 1 drops unread frames instead of
+    blocking the joint-capture poll loop.
+    """
+
     def __init__(self, bind: str) -> None:
         self._ctx = zmq.Context()
         self._pub = self._ctx.socket(zmq.PUB)
@@ -88,6 +113,11 @@ class RxPublisher:
 
 
 def slot_timing(record: dict) -> tuple[int, int]:
+    """Split absolute_slot into the SFN and slot the plotter header expects.
+
+    Numerology 1 (30 kHz) has 20 slots per 10 ms frame. SFN on the wire is
+    16-bit; the plotter only stores the low 16 bits.
+    """
     absolute = int(record.get("absolute_slot") or 0)
     per_frame = 10 * (1 << int(record.get("numerology") or 1))
     return (absolute // per_frame) & 0xFFFF, absolute % per_frame
@@ -97,6 +127,7 @@ def main() -> None:
     host = os.environ.get("OCUDU_E3_HOST", "127.0.0.1")
     port = env_int("OCUDU_E3_PORT", 36423)
     bind = os.environ.get("OCUDU_ZMQ_BIND", "tcp://0.0.0.0:15556")
+    # 0 is RX port 0. Negative means RMS over all ports.
     antenna = env_int("OCUDU_RX_ANTENNA", 0)
     shutdown = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: shutdown.set())
@@ -118,9 +149,13 @@ def main() -> None:
         flush=True,
     )
     try:
+        # Only one joint subscriber is allowed. Retry until the gNB accepts us
+        # (the previous consumer must already be stopped).
         while not shutdown.is_set():
             try:
                 client = E3Tools(host, port)
+                # cell_id 0 and rnti 0 mean every cell and every UE. ul.grid is
+                # still published for uplink slots that have no UE.
                 sub = client.request(
                     {"operation": "joint.subscribe", "cell_id": 0, "rnti": 0}
                 )
@@ -134,6 +169,9 @@ def main() -> None:
         if shutdown.is_set() or client is None:
             return
 
+        # Subscribe returns a token and the Unix socket path. SharedPool sends
+        # that token and receives a read-only fd for the anonymous memfd; the
+        # IQ bytes themselves are not on the socket.
         pool = SharedPool(sub)
         print(
             json.dumps(
@@ -146,6 +184,8 @@ def main() -> None:
             ),
             flush=True,
         )
+        # Ack is sent on the *next* poll, after this batch has been copied.
+        # The gNB frees the shared-pool pages when it sees [object_id, generation].
         ack: list[list[int]] = []
         published = dropped = skipped = stale = 0
         previous = start = time.monotonic()
@@ -155,12 +195,16 @@ def main() -> None:
             )
             ack = []
             for record in result.get("records", []):
+                # Ack channel, TB, and incomplete grids too, or their pages sit
+                # until the 500 ms lease expires and the pool overflows.
                 if "object_id" in record:
                     ack.append([record["object_id"], record["generation"]])
                 if record.get("stream") != "ul.grid" or record.get("state") != "complete":
                     skipped += 1
                     continue
                 try:
+                    # Copy out of the mapping before the next poll acks the slot.
+                    # A generation mismatch means the gNB reused the pages.
                     payload = pool.read(record)
                 except StaleObject:
                     stale += 1
@@ -193,8 +237,12 @@ def main() -> None:
                     flush=True,
                 )
                 previous = now
+            # Keep polling faster than the object lease. 5 ms is enough; the
+            # plotter only encodes about 24 fps and ZeroMQ drops the rest.
             shutdown.wait(0.005)
     finally:
+        # Unsubscribe so the gNB clears the single session and another consumer
+        # (joint-capture, or a recorder) can subscribe.
         if client is not None:
             try:
                 if sub is not None:
