@@ -1,0 +1,33 @@
+# Forward OCUDU joint-capture ul.grid to the RX resource-grid visualizer.
+#
+# This process is the single joint-capture subscriber. Stop
+# ocudu-tools-wnc-joint-capture-1 before starting it.
+#
+# From resource-grid-visualizer/ocudu_forwarder:
+#   docker compose up -d --build
+#
+# The RX plotter (compose-backend-rx-1) connects to
+# tcp://host.docker.internal:15556. This service binds that port on the host.
+
+services:
+  ocudu-forwarder:
+    build: .
+    image: ocudu-ul-grid-forwarder:local
+    network_mode: host
+    restart: unless-stopped
+    cpuset: "0-3"
+    cpus: 2
+    mem_limit: 1g
+    environment:
+      PYTHONUNBUFFERED: "1"
+      OCUDU_E3_HOST: ${OCUDU_E3_HOST:-127.0.0.1}
+      OCUDU_E3_PORT: ${OCUDU_E3_PORT:-36423}
+      OCUDU_ZMQ_BIND: ${OCUDU_ZMQ_BIND:-tcp://0.0.0.0:15556}
+      OCUDU_RX_ANTENNA: ${OCUDU_RX_ANTENNA:-0}
+    volumes:
+      - joint-ipc:/run/ocudu:ro
+
+volumes:
+  joint-ipc:
+    external: true
+    name: ocudu-tools-wnc_joint-ipc
