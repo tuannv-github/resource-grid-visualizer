@@ -62,6 +62,20 @@ extern std::atomic<uint64_t> g_rgba_frame_queue_drops;
 extern std::atomic<uint64_t> g_raster_work_queue_drops;
 extern std::atomic<uint64_t> g_capturer_frame_queue_drops;
 extern std::atomic<uint64_t> g_assembler_input_msgs;
+/** 1 while the IQ reader is replaying the last real slot because no newer slot arrived. */
+extern std::atomic<uint32_t> g_input_held;
+/** CUDA control SHM mapped by the plotter; null before launch and after shutdown. */
+extern void* g_plotter_fps_shm;
+/** uint32 in the CUDA control SHM: 1 = replaying the last slot at 1 Hz. Bytes 376…379 (after capturer stop @372). */
+inline constexpr size_t kShmInputHeldOff = 376;
+
+inline void plotter_store_input_held(bool held) {
+  const uint32_t v = held ? 1u : 0u;
+  g_input_held.store(v, std::memory_order_relaxed);
+  void* const base = g_plotter_fps_shm;
+  if (!base) return;
+  std::memcpy(static_cast<char*>(base) + kShmInputHeldOff, &v, sizeof(v));
+}
 
 /** Ids for rate-limited drop warnings (`plotter_warn_queue_drop_oldest`). */
 enum class PlotterQueueDropKind : uint32_t {

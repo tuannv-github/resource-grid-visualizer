@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <ctime>
 #include <fcntl.h>
@@ -155,19 +156,21 @@ void ResgridMqStreamIn::close() {
   last_frame_symbols_ = 0;
 }
 
-bool ResgridMqStreamIn::mq_receive_one(ResgridMqChunkHdr* hdr, std::vector<uint8_t>& payload) {
+bool ResgridMqStreamIn::mq_receive_one(ResgridMqChunkHdr* hdr, std::vector<uint8_t>& payload, int wait_ms) {
   payload.resize(mq_buf_sz_);
+  if (wait_ms < 1) wait_ms = 1;
   struct timespec ts {};
   clock_gettime(CLOCK_REALTIME, &ts);
-  ts.tv_nsec += 500000000;
-  if (ts.tv_nsec >= 1000000000) {
-    ts.tv_sec += ts.tv_nsec / 1000000000;
-    ts.tv_nsec %= 1000000000;
+  ts.tv_sec += wait_ms / 1000;
+  ts.tv_nsec += (long)(wait_ms % 1000) * 1000000L;
+  if (ts.tv_nsec >= 1000000000L) {
+    ts.tv_sec += ts.tv_nsec / 1000000000L;
+    ts.tv_nsec %= 1000000000L;
   }
   const ssize_t r =
       mq_timedreceive((mqd_t)mq_, reinterpret_cast<char*>(payload.data()), payload.size(), nullptr, &ts);
   if (r < 0) {
-    if (errno == EINTR) return mq_receive_one(hdr, payload);
+    if (errno == EINTR) return mq_receive_one(hdr, payload, wait_ms);
     if (errno == ETIMEDOUT) {
       std::memset(hdr, 0, sizeof(*hdr));
       payload.clear();
@@ -186,13 +189,27 @@ bool ResgridMqStreamIn::mq_receive_one(ResgridMqChunkHdr* hdr, std::vector<uint8
   return true;
 }
 
-bool ResgridMqStreamIn::pump_one_logical_frame() {
+bool ResgridMqStreamIn::pump_one_logical_frame(std::chrono::steady_clock::time_point deadline, bool* timed_out) {
+  if (timed_out) *timed_out = false;
   for (;;) {
     if (!g_run.load()) return false;
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) {
+      if (timed_out) *timed_out = true;
+      return false;
+    }
+    const auto remain_ms = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
+    const int wait_ms = (int)std::min<int64_t>(remain_ms < 1 ? 1 : remain_ms, 500);
     ResgridMqChunkHdr h{};
     std::vector<uint8_t> body;
-    if (!mq_receive_one(&h, body)) return false;
-    if (h.magic == 0 && body.empty()) continue; /* mq_timedreceive timeout */
+    if (!mq_receive_one(&h, body, wait_ms)) return false;
+    if (h.magic == 0 && body.empty()) {
+      if (std::chrono::steady_clock::now() >= deadline) {
+        if (timed_out) *timed_out = true;
+        return false;
+      }
+      continue; /* mq_timedreceive timeout */
+    }
     if (h.magic != kResgridMqChunkMagic) continue;
     if (h.version != 1u && h.version != 2u) continue;
     if (h.n_chunks == 0 || h.chunk_idx >= h.n_chunks) continue;
@@ -232,12 +249,26 @@ bool ResgridMqStreamIn::pump_one_logical_frame() {
 }
 
 bool ResgridMqStreamIn::read_exact(void* buf, size_t n, const char* ctx) {
+  return read_exact_for(buf, n, ctx, -1, nullptr);
+}
+
+bool ResgridMqStreamIn::read_exact_for(void* buf, size_t n, const char* ctx, int timeout_ms, bool* timed_out) {
+  if (timed_out) *timed_out = false;
   auto* out = reinterpret_cast<uint8_t*>(buf);
   size_t got = 0;
+  const auto deadline = timeout_ms < 0
+                            ? std::chrono::steady_clock::time_point::max()
+                            : std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
   while (got < n && g_run.load()) {
     const size_t avail = pending_.size() > pending_off_ ? pending_.size() - pending_off_ : 0;
     if (avail == 0) {
-      if (!pump_one_logical_frame()) {
+      bool idle = false;
+      const auto wait_deadline = (got == 0) ? deadline : std::chrono::steady_clock::time_point::max();
+      if (!pump_one_logical_frame(wait_deadline, &idle)) {
+        if (idle && got == 0) {
+          if (timed_out) *timed_out = true;
+          return false;
+        }
         if (!g_run.load()) return false;
         fprintf(stderr, "resgrid_plotter: MQ read %s: stream ended or error\n", ctx ? ctx : "");
         return false;

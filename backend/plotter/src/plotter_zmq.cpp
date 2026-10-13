@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -151,15 +152,30 @@ bool ResgridZmqStreamIn::open_read(const char* path)
   return true;
 }
 
-bool ResgridZmqStreamIn::pump_one_frame()
+bool ResgridZmqStreamIn::pump_one_frame(std::chrono::steady_clock::time_point deadline, bool* timed_out)
 {
+  if (timed_out) *timed_out = false;
   if (!impl_) return false;
   for (;;) {
     if (!g_run.load()) return false;
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) {
+      if (timed_out) *timed_out = true;
+      return false;
+    }
+    const auto remain_ms = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
+    const int wait_ms = (int)std::min<int64_t>(remain_ms < 1 ? 1 : remain_ms, 500);
+    impl_->sub.set(zmq::sockopt::rcvtimeo, wait_ms);
     zmq::message_t first;
     try {
       const auto got = impl_->sub.recv(first, zmq::recv_flags::none);
-      if (!got) continue;
+      if (!got) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+          if (timed_out) *timed_out = true;
+          return false;
+        }
+        continue;
+      }
       zmq::message_t body;
       const void* bytes = first.data();
       size_t nbytes = first.size();
@@ -199,12 +215,27 @@ bool ResgridZmqStreamIn::pump_one_frame()
 
 bool ResgridZmqStreamIn::read_exact(void* buf, size_t n, const char* ctx)
 {
+  return read_exact_for(buf, n, ctx, -1, nullptr);
+}
+
+bool ResgridZmqStreamIn::read_exact_for(void* buf, size_t n, const char* ctx, int timeout_ms, bool* timed_out)
+{
+  if (timed_out) *timed_out = false;
   auto* out = reinterpret_cast<uint8_t*>(buf);
   size_t got = 0;
+  const auto deadline = timeout_ms < 0
+                            ? std::chrono::steady_clock::time_point::max()
+                            : std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
   while (got < n && g_run.load()) {
     const size_t avail = pending_.size() > pending_off_ ? pending_.size() - pending_off_ : 0;
     if (avail == 0) {
-      if (!pump_one_frame()) {
+      bool idle = false;
+      const auto wait_deadline = (got == 0) ? deadline : std::chrono::steady_clock::time_point::max();
+      if (!pump_one_frame(wait_deadline, &idle)) {
+        if (idle && got == 0) {
+          if (timed_out) *timed_out = true;
+          return false;
+        }
         if (!g_run.load()) return false;
         std::fprintf(stderr, "resgrid_plotter: ZMQ read %s: stream ended or error\n", ctx ? ctx : "");
         return false;

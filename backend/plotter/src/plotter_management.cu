@@ -18,6 +18,8 @@ std::atomic<uint64_t> g_rgba_frame_queue_drops{0};
 std::atomic<uint64_t> g_raster_work_queue_drops{0};
 std::atomic<uint64_t> g_capturer_frame_queue_drops{0};
 std::atomic<uint64_t> g_assembler_input_msgs{0};
+std::atomic<uint32_t> g_input_held{0};
+void* g_plotter_fps_shm = nullptr;
 
 void plotter_warn_queue_drop_oldest(PlotterQueueDropKind kind, const char* queue_name,
                                     const char* producer_stage, uint32_t drops_this_push) {

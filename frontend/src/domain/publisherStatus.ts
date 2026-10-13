@@ -73,6 +73,8 @@ export type PublisherStatus = {
   encoder_input_image_s?: number | null;
   /** CUDA SHM @80 Hz */
   encoder_output_fps?: number | null;
+  /** True while the plotter replays the last real slot at 1 Hz because no newer slot arrived. */
+  input_held?: boolean;
   /** File capturer (JPEG) enabled; parallel to **encoder** (RTSP/video). */
   capturer_capable?: boolean;
   capturer_active?: boolean | null;

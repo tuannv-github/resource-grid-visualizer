@@ -450,7 +450,7 @@ body {
 }
 
 .media-status {
-  display: flex;
+  display: none;
   flex-wrap: nowrap;
   gap: 0.35rem 0.9rem;
   margin: 0 0 0.4rem;
@@ -464,6 +464,62 @@ body {
 
 .media-status > span {
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.media-status > span[data-role="media-status-input"] {
+  flex: 0 0 auto;
+}
+
+.media-status > span[data-role="media-status-input"][data-state="warn"],
+.media-status > span[data-role="media-status-held"] {
+  flex: 0 0 auto;
+  color: var(--bad);
+  font-weight: 600;
+}
+
+.grid-metrics {
+  width: 100%;
+  margin: 0 0 0.4rem;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.grid-metrics caption {
+  caption-side: top;
+  padding: 0 0 0.2rem;
+  text-align: left;
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.grid-metrics th,
+.grid-metrics td {
+  padding: 0.18rem 0.4rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
+  text-align: left;
+  font-weight: 500;
+}
+
+.grid-metrics thead th,
+.grid-metrics tbody th {
+  color: var(--text-dim);
+}
+
+.grid-metrics td[data-state="warn"] {
+  color: var(--bad);
+  font-weight: 600;
+}
+
+.grid-metrics td[data-role="metric-iq"],
+.grid-metrics td[data-role="metric-playback"] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

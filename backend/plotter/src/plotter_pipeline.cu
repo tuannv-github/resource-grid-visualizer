@@ -90,6 +90,8 @@ static void pipeline_stage_output_stats_main(void* fps_base, bool internal_synth
         fps_shm_store(fps_base, kEncoderIn, raster_out_hz);
         fps_shm_store(fps_base, kEncoderOut, enc_out_hz);
       }
+      const uint32_t held = g_input_held.load(std::memory_order_relaxed);
+      std::memcpy(static_cast<char*>(fps_base) + kShmInputHeldOff, &held, sizeof(held));
     }
     p0 = p1;
     ain0 = ain1;
@@ -172,6 +174,10 @@ int plotter_run_launch(const PlotterLaunchConfig& cfg) {
 
   FpsShmMap fps_map(cfg.cuda_shm_name);
   void* fps_base = fps_map.ptr();
+  g_plotter_fps_shm = fps_base;
+  struct ClearPlotterFpsShm {
+    ~ClearPlotterFpsShm() { g_plotter_fps_shm = nullptr; }
+  } clear_plotter_fps_shm;
 
   if (cfg.have_fapi) {
     slot_assembled_q = std::make_unique<AssembledSlotQueue>(std::max(1, cfg.qdepth));

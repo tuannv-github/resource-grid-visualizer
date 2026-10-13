@@ -653,6 +653,8 @@ _SHM_CAPTURER_QUEUE_DEPTH_OFF = 360
 _SHM_CAPTURER_QUEUE_CAP_OFF = 364
 _SHM_CAPTURER_JPEG_THREADS_OFF = 368
 _SHM_CAPTURER_STOP_OFF = 372
+# uint32 written by resgrid_plotter: 1 while the last real slot is replayed at 1 Hz.
+_SHM_INPUT_HELD_OFF = 376
 _frame_re = re.compile(r"frame=\s*(\d+)")
 _fps_re = re.compile(r"fps=\s*([\d.]+)")
 _speed_re = re.compile(r"speed=\s*([\d.]+)x")
@@ -747,6 +749,13 @@ class PlotterStatus(BaseModel):
     raster_output_image_s: Optional[float] = None
     encoder_input_image_s: Optional[float] = None
     encoder_output_fps: Optional[float] = None
+    input_held: bool = Field(
+        default=False,
+        description=(
+            "True after at least one resource-grid slot was received and no newer slot arrived for 1 s. "
+            "The plotter replays that slot at 1 Hz so the encoder pipe stays open."
+        ),
+    )
     capturer_capable: bool = False
     capturer_active: Optional[bool] = None
     capturer_phase: Optional[str] = None
@@ -3189,6 +3198,7 @@ def api_plotter_status(request: Request):
     cap_qd: Optional[int] = None
     cap_qc: Optional[int] = None
     cap_jt: Optional[int] = None
+    input_held = False
     if gen and _is_plotter_running() and _plotter_cuda_shm is not None and len(_plotter_cuda_shm.buf) >= _IQ_CUDA_SHM_BYTES:
         tot, inflight, written, phase, p, qd, qc, jt = _read_capturer_shm_unlocked()
         cap_total = int(tot)
@@ -3201,6 +3211,9 @@ def api_plotter_status(request: Request):
         cap_qd = int(qd)
         cap_qc = int(qc)
         cap_jt = int(jt)
+        if len(_plotter_cuda_shm.buf) >= _SHM_INPUT_HELD_OFF + 4:
+            (held_flag,) = struct.unpack_from("I", _plotter_cuda_shm.buf, _SHM_INPUT_HELD_OFF)
+            input_held = held_flag != 0
     peer = request.client.host if request.client else "-"
     grid_prb, grid_symbols = _plotter_resource_grid_dims()
     sym_start, sym_stop = _plotter_symbol_window()
@@ -3235,6 +3248,7 @@ def api_plotter_status(request: Request):
         raster_output_image_s=rast_out,
         encoder_input_image_s=enc_in,
         encoder_output_fps=enc_out,
+        input_held=input_held,
         capturer_capable=cap_capable,
         capturer_active=cap_active,
         capturer_phase=cap_phase,

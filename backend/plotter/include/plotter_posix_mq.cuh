@@ -1,6 +1,7 @@
 #pragma once
 /** Chunked POSIX message queue transport for RGBA, full-grid I/Q, and slot/FAPI payloads (replaces named FIFOs). */
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -37,6 +38,14 @@ class ResgridMqStreamIn {
   /** Blocking read of exactly **n** bytes (uses 500 ms timeouts while waiting), like read(2) on a pipe. */
   virtual bool read_exact(void* buf, size_t n, const char* ctx);
 
+  /**
+   * Read exactly **n** bytes.
+   * **timeout_ms < 0** waits until a full frame or a stream error.
+   * **timeout_ms >= 0** returns false and sets **\*timed_out** when no new byte arrives before the deadline.
+   * A frame that has already started is always finished, even past the deadline.
+   */
+  virtual bool read_exact_for(void* buf, size_t n, const char* ctx, int timeout_ms, bool* timed_out);
+
   virtual bool ok() const { return mq_ >= 0; }
 
   /** Dimensions from the most recently completed logical frame; 0 if unknown. */
@@ -50,8 +59,9 @@ class ResgridMqStreamIn {
   }
 
  private:
-  bool pump_one_logical_frame();
-  bool mq_receive_one(ResgridMqChunkHdr* hdr, std::vector<uint8_t>& payload);
+  /** **deadline** of **time_point::max()** waits until a frame or an error. */
+  bool pump_one_logical_frame(std::chrono::steady_clock::time_point deadline, bool* timed_out);
+  bool mq_receive_one(ResgridMqChunkHdr* hdr, std::vector<uint8_t>& payload, int wait_ms);
 
   int mq_ = -1;
   size_t mq_buf_sz_ = 8192;
@@ -88,6 +98,7 @@ class ResgridZmqStreamIn : public ResgridMqStreamIn {
 
   bool open_read(const char* path);
   bool read_exact(void* buf, size_t n, const char* ctx) override;
+  bool read_exact_for(void* buf, size_t n, const char* ctx, int timeout_ms, bool* timed_out) override;
   bool ok() const override { return ok_; }
   uint16_t last_frame_prb() const override { return prb_; }
   uint16_t last_frame_symbols() const override { return symbols_; }
@@ -110,7 +121,7 @@ class ResgridZmqStreamIn : public ResgridMqStreamIn {
   bool has_timing_ = false;
   bool ok_ = false;
 
-  bool pump_one_frame();
+  bool pump_one_frame(std::chrono::steady_clock::time_point deadline, bool* timed_out);
 };
 
 /** Connect, read one resource-grid header, then disconnect. Used to size the canvas before CUDA alloc. */

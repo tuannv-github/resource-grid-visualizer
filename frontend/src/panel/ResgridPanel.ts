@@ -82,6 +82,18 @@ export class ResgridPanel {
   private mediaStatusGrid: HTMLElement | null;
   private mediaStatusIq: HTMLElement | null;
   private mediaStatusPlay: HTMLElement | null;
+  private mediaStatusHeld: HTMLElement | null = null;
+  private mediaStatusInput: HTMLElement | null = null;
+  private pubInputFps: HTMLElement | null = null;
+  private metricInput: HTMLElement | null = null;
+  private metricEncoder: HTMLElement | null = null;
+  private metricGrid: HTMLElement | null = null;
+  private metricState: HTMLElement | null = null;
+  private metricPlotter: HTMLElement | null = null;
+  private metricIq: HTMLElement | null = null;
+  private metricPlayback: HTMLElement | null = null;
+  private inputHeld = false;
+  private playbackMediaState = "warn";
   private pubGenFapi: HTMLElement;
   private btnPlotterStart: HTMLButtonElement;
   private btnPlotterStop: HTMLButtonElement;
@@ -119,6 +131,16 @@ export class ResgridPanel {
     this.mediaStatusGrid = queryRole(this.mediaRoot, "media-status-grid");
     this.mediaStatusIq = queryRole(this.mediaRoot, "media-status-iq");
     this.mediaStatusPlay = queryRole(this.mediaRoot, "media-status-play");
+    this.mediaStatusHeld = this.ensureHeldWarning();
+    this.mediaStatusInput = this.ensureInputFps();
+    this.pubInputFps = queryRole(this.controlsRoot, "pub-input-fps");
+    this.metricInput = queryRole(this.mediaRoot, "metric-input");
+    this.metricEncoder = queryRole(this.mediaRoot, "metric-encoder");
+    this.metricGrid = queryRole(this.mediaRoot, "metric-grid");
+    this.metricState = queryRole(this.mediaRoot, "metric-state");
+    this.metricPlotter = queryRole(this.mediaRoot, "metric-plotter");
+    this.metricIq = queryRole(this.mediaRoot, "metric-iq");
+    this.metricPlayback = queryRole(this.mediaRoot, "metric-playback");
     this.pubGenFapi = requireRole(this.controlsRoot, "pub-gen-fapi");
     this.btnPlotterStart = requireRole(this.controlsRoot, "btn-plotter-start");
     this.btnPlotterStop = requireRole(this.controlsRoot, "btn-plotter-stop");
@@ -138,9 +160,82 @@ export class ResgridPanel {
     });
   }
 
+  /** Full-uplink 7D1S2U at 30 kHz is 400 slot/s. Below this the plot line warns. */
+  private static readonly SLOW_INPUT_HZ = 50;
+
+  private ensureInputFps(): HTMLElement | null {
+    if (!this.mediaStatus) return null;
+    const existing = queryRole<HTMLElement>(this.mediaStatus, "media-status-input");
+    if (existing) return existing;
+    const el = document.createElement("span");
+    el.dataset.role = "media-status-input";
+    el.textContent = "Input —";
+    this.mediaStatus.insertBefore(el, this.mediaStatus.firstChild);
+    return el;
+  }
+
+  private ensureHeldWarning(): HTMLElement | null {
+    if (!this.mediaStatus) return null;
+    const existing = queryRole<HTMLElement>(this.mediaStatus, "media-status-held");
+    if (existing) return existing;
+    const el = document.createElement("span");
+    el.dataset.role = "media-status-held";
+    el.hidden = true;
+    this.mediaStatus.appendChild(el);
+    return el;
+  }
+
+  private renderGridTable(s: PublisherStatus, inputLabel: string, inputWarn: boolean): void {
+    const enc = s.encoder_output_fps ?? s.stats?.fps ?? null;
+    const encKnown = enc != null && !Number.isNaN(enc);
+    const gridText =
+      s.iq_prb != null && s.iq_symbols != null ? `${s.iq_prb} PRB × ${s.iq_symbols} symbols` : "—";
+    let state = "—";
+    if (s.generating) {
+      if (this.inputHeld) state = "Replaying last slot";
+      else if (inputWarn) state = "Slow";
+      else state = "Live";
+    } else if (s.cuda_plotter_active) {
+      state = "Plotter idle";
+    } else {
+      state = "Stopped";
+    }
+    const setCell = (el: HTMLElement | null, text: string, warn: boolean) => {
+      if (!el) return;
+      el.textContent = text;
+      if (warn) el.dataset.state = "warn";
+      else delete el.dataset.state;
+    };
+    const plotterText = s.cuda_plotter_active ? (s.generating ? "Publishing" : "Running") : "Stopped";
+    const iqText = s.iq_endpoint?.trim() || "—";
+    setCell(this.metricInput, s.generating ? inputLabel : "—", inputWarn && !!s.generating);
+    setCell(this.metricEncoder, s.generating && encKnown ? `${enc.toFixed(1)} /s` : "—", false);
+    setCell(this.metricGrid, gridText, false);
+    setCell(this.metricPlotter, plotterText, !s.cuda_plotter_active);
+    setCell(this.metricIq, iqText, false);
+    if (this.metricIq) this.metricIq.title = iqText === "—" ? "" : iqText;
+    setCell(this.metricState, state, inputWarn && !!s.generating);
+  }
+
+  private paintMediaStatus(): void {
+    if (this.mediaStatus) this.mediaStatus.dataset.state = this.inputHeld ? "warn" : this.playbackMediaState;
+  }
+
+  private shortPlayback(text: string): string {
+    const lower = text.toLowerCase();
+    if (/whep 404|waiting for webrtc|retrying automatically/.test(lower)) return "Waiting for stream";
+    if (/click the video/.test(lower)) return "Click video to play";
+    if (text.length > 42) return `${text.slice(0, 39)}…`;
+    return text;
+  }
+
   private setPlaybackStatus(text: string): void {
     this.statusEl.textContent = text;
     if (this.mediaStatusPlay) this.mediaStatusPlay.textContent = text;
+    if (this.metricPlayback) {
+      this.metricPlayback.textContent = this.shortPlayback(text);
+      this.metricPlayback.title = text;
+    }
     const lower = text.toLowerCase();
     let state = "warn";
     if (/error|fail|cannot|not supported|blocked|invalid|network error|no stream/.test(lower)) state = "bad";
@@ -151,8 +246,13 @@ export class ResgridPanel {
     ) {
       state = "ok";
     }
+    this.playbackMediaState = state;
     this.statusEl.dataset.state = state;
-    if (this.mediaStatus) this.mediaStatus.dataset.state = state;
+    if (this.metricPlayback) {
+      if (state === "bad" || state === "warn") this.metricPlayback.dataset.state = "warn";
+      else delete this.metricPlayback.dataset.state;
+    }
+    this.paintMediaStatus();
   }
 
   private initModeSelect(): void {
@@ -319,6 +419,32 @@ export class ResgridPanel {
     }
     if (this.mediaStatusGrid) this.mediaStatusGrid.textContent = gridLabel;
     if (this.mediaStatusIq) this.mediaStatusIq.textContent = iqLabel;
+    this.inputHeld = s.input_held === true && !!s.generating;
+    const inputFps = s.assembly_input_msg_s;
+    const inputKnown = inputFps != null && !Number.isNaN(inputFps);
+    const inputSlow =
+      !!s.generating && inputKnown && inputFps < ResgridPanel.SLOW_INPUT_HZ;
+    const inputWarn = this.inputHeld || inputSlow;
+    const inputLabel = inputKnown ? `${inputFps.toFixed(1)} /s` : "—";
+    let inputText = `Input ${inputLabel}`;
+    if (this.inputHeld) inputText += " — replaying last slot";
+    else if (inputSlow) inputText += " — slow";
+    if (this.mediaStatusInput) {
+      this.mediaStatusInput.textContent = s.generating ? inputText : "Input —";
+      if (inputWarn && s.generating) this.mediaStatusInput.dataset.state = "warn";
+      else delete this.mediaStatusInput.dataset.state;
+    }
+    if (this.pubInputFps) {
+      this.pubInputFps.textContent = s.generating && inputKnown ? inputLabel : "—";
+      if (inputWarn && s.generating) this.pubInputFps.dataset.state = "warn";
+      else delete this.pubInputFps.dataset.state;
+    }
+    if (this.mediaStatusHeld) {
+      this.mediaStatusHeld.hidden = !this.inputHeld;
+      this.mediaStatusHeld.textContent = this.inputHeld ? "No new slot — replaying last slot" : "";
+    }
+    this.renderGridTable(s, inputKnown ? inputLabel : "—", inputWarn);
+    this.paintMediaStatus();
     const st = s.stats ?? null;
     this.pubFrames.textContent = st?.frame != null ? String(st.frame) : "—";
     this.pubIqProducerFps.textContent =

@@ -330,11 +330,20 @@ rg_slot_reader_done:
   fprintf(stderr, "resgrid_plotter: resource-grid slot-IQ reader exiting (raster MQ thread)\n");
 }
 
-bool read_one_external_iq_frame(ResgridMqStreamIn* mq, int ncells, GridFrame& gf) {
+enum class IqFrameRead { Frame, Timeout, End };
+
+/** timeout_ms < 0 waits for the next grid. timeout_ms >= 0 returns Timeout when none arrives in time. */
+IqFrameRead read_one_external_iq_frame_for(ResgridMqStreamIn* mq, int ncells, GridFrame& gf, int timeout_ms) {
   gf.iq.resize((size_t)ncells);
   gf.chan.assign((size_t)ncells, 0);
   gf.cell_rnti.clear();
-  if (!mq->read_exact(gf.iq.data(), (size_t)ncells * sizeof(float2), "iq-mq full-grid payload")) return false;
+  gf.has_timing = false;
+  bool timed_out = false;
+  if (!mq->read_exact_for(gf.iq.data(), (size_t)ncells * sizeof(float2), "iq-mq full-grid payload", timeout_ms,
+                          &timed_out)) {
+    if (timed_out) return IqFrameRead::Timeout;
+    return IqFrameRead::End;
+  }
   uint16_t sfn = 0;
   uint16_t slot = 0;
   if (mq->last_frame_timing(sfn, slot)) {
@@ -354,19 +363,55 @@ bool read_one_external_iq_frame(ResgridMqStreamIn* mq, int ncells, GridFrame& gf
                 (unsigned)hp, (unsigned)hs, ncells);
     }
   }
-  return true;
+  return IqFrameRead::Frame;
 }
 
-/** Full-grid MQ reader: each logical frame is one complete I/Q grid (pipeline 2 or channel-mode IQ sidecar). */
+/** Replay the last real grid at this interval when the producer goes quiet, so the encoder pipe stays open. */
+constexpr int kReplayLastSlotMs = 1000;
+
+static void push_external_iq_frame(GridFrameQueue* outq, GridFrame gf, const char* producer_stage) {
+  g_assembler_input_msgs.fetch_add(1, std::memory_order_relaxed);
+  g_stage_output_count_assembler.fetch_add(1, std::memory_order_relaxed);
+  outq->push(std::move(gf), producer_stage);
+}
+
+/** Full-grid MQ reader: each logical frame is one complete I/Q grid (pipeline 2 or channel-mode IQ sidecar).
+ *  After the first real slot, a quiet producer is filled with that slot once per second. */
 void external_grid_frame_reader_main(ResgridMqStreamIn* mq, int ncells, GridFrameQueue* outq, const char* producer_stage) {
   fprintf(stderr, "resgrid_plotter: external IQ reader → frame queue (cells=%d)\n", ncells);
+  GridFrame last;
+  bool have_last = false;
+  bool holding = false;
   while (g_run.load()) {
     GridFrame gf;
-    if (!read_one_external_iq_frame(mq, ncells, gf)) break;
-    g_assembler_input_msgs.fetch_add(1, std::memory_order_relaxed);
-    g_stage_output_count_assembler.fetch_add(1, std::memory_order_relaxed);
-    outq->push(std::move(gf), producer_stage);
+    const int timeout_ms = have_last ? kReplayLastSlotMs : -1;
+    const IqFrameRead got = read_one_external_iq_frame_for(mq, ncells, gf, timeout_ms);
+    if (got == IqFrameRead::End) break;
+    if (got == IqFrameRead::Timeout) {
+      if (!have_last) continue;
+      if (!holding) {
+        if (last.has_timing)
+          fprintf(stderr,
+                  "resgrid_plotter: no new slot for %d ms — replaying last slot sfn=%u slot=%u at 1 Hz\n",
+                  kReplayLastSlotMs, (unsigned)last.sfn, (unsigned)last.slot);
+        else
+          fprintf(stderr, "resgrid_plotter: no new slot for %d ms — replaying last slot at 1 Hz\n", kReplayLastSlotMs);
+      }
+      holding = true;
+      plotter_store_input_held(true);
+      push_external_iq_frame(outq, last, producer_stage);
+      continue;
+    }
+    if (holding) {
+      fprintf(stderr, "resgrid_plotter: live slot resumed\n");
+      plotter_store_input_held(false);
+    }
+    holding = false;
+    last = gf;
+    have_last = true;
+    push_external_iq_frame(outq, std::move(gf), producer_stage);
   }
+  if (holding) plotter_store_input_held(false);
 }
 
 static bool iq_endpoint_is_zmq(const char* path)
