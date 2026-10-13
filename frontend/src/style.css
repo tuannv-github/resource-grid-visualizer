@@ -481,48 +481,59 @@ body {
 }
 
 .grid-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
   width: 100%;
-  margin: 0 0 0.4rem;
-  border-collapse: collapse;
-  table-layout: fixed;
+  margin: 0 0 0.3rem;
   font-family: "IBM Plex Mono", monospace;
   font-size: 11px;
-  line-height: 1.35;
+  line-height: 1.15;
 }
 
-.grid-metrics caption {
-  caption-side: top;
-  padding: 0 0 0.2rem;
-  text-align: left;
+@container gridplot (min-width: 28rem) {
+  .grid-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .grid-metric--wide {
+    grid-column: span 2;
+  }
+}
+
+@container gridplot (min-width: 42rem) {
+  .grid-metrics {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.grid-metric {
+  min-width: 0;
+  padding: 0.12rem 0.32rem 0.16rem;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.grid-metric-k {
+  display: block;
   color: var(--text-dim);
-  font-size: 10px;
+  font-size: 9px;
+  font-weight: 500;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
-.grid-metrics th,
-.grid-metrics td {
-  padding: 0.18rem 0.4rem;
-  border-bottom: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
-  text-align: left;
-  font-weight: 500;
-}
-
-.grid-metrics thead th,
-.grid-metrics tbody th {
-  color: var(--text-dim);
-}
-
-.grid-metrics td[data-state="warn"] {
-  color: var(--bad);
-  font-weight: 600;
-}
-
-.grid-metrics td[data-role="metric-iq"],
-.grid-metrics td[data-role="metric-playback"] {
+.grid-metric-v {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 500;
+}
+
+.grid-metric-v[data-state="warn"] {
+  color: var(--bad);
+  font-weight: 600;
 }
 
 .media-status[data-state="ok"] {
@@ -544,6 +555,8 @@ body {
   box-sizing: border-box;
   overflow-x: clip;
   overflow-y: hidden;
+  container-type: inline-size;
+  container-name: gridplot;
 }
 
 .layout-media--solo {
