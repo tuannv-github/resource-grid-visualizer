@@ -723,17 +723,16 @@ void RasterStage::single_thread_main() {
 
 RasterWorkQueue::RasterWorkQueue(int capacity) : cap_(std::max(1, capacity)) {}
 
-void RasterWorkQueue::push(RasterWorkItem&& frame, const char* producer_stage) {
-  std::lock_guard<std::mutex> lk(mu_);
+void RasterWorkQueue::push(RasterWorkItem&& frame, const char* /*producer_stage*/) {
+  /* Each item already has a merger sequence number. Dropping one leaves a hole:
+   * the merger waits for that seq and retains every later RGBA frame, which grows
+   * without bound and OOM-kills the process. Block instead. The input queues
+   * ahead of the acquirer are the ones that drop the oldest slot. */
+  std::unique_lock<std::mutex> lk(mu_);
+  not_full_.wait(lk, [&] {
+    return (int)q_.size() < cap_ || !g_run.load(std::memory_order_relaxed);
+  });
   if (!g_run.load(std::memory_order_relaxed)) return;
-  uint32_t ndrop = 0;
-  while ((int)q_.size() >= cap_) {
-    q_.pop_front();
-    ++ndrop;
-    g_raster_work_queue_drops.fetch_add(1, std::memory_order_relaxed);
-  }
-  if (ndrop)
-    plotter_warn_queue_drop_oldest(PlotterQueueDropKind::RasterWork, "RasterWorkQueue", producer_stage, ndrop);
   q_.push_back(std::move(frame));
   not_empty_.notify_one();
 }
@@ -831,8 +830,26 @@ void RasterStage::merger_main() {
     std::unique_lock<std::mutex> lk(pool_mu_);
     pool_cv_.wait(lk, [&] {
       return pool_pending_.count(pool_next_merged_seq_) ||
-             (pool_acquire_done_ && pool_next_merged_seq_ == pool_acquire_issued_end_);
+             (pool_acquire_done_ && pool_next_merged_seq_ == pool_acquire_issued_end_) ||
+             pool_pending_.size() > 64;
     });
+    if (!pool_pending_.count(pool_next_merged_seq_) && pool_pending_.size() > 64) {
+      uint64_t next = 0;
+      bool found = false;
+      for (const auto& kv : pool_pending_) {
+        if (kv.first < pool_next_merged_seq_) continue;
+        if (!found || kv.first < next) {
+          next = kv.first;
+          found = true;
+        }
+      }
+      if (found && next > pool_next_merged_seq_) {
+        fprintf(stderr,
+                "resgrid_plotter: raster merger skipped %llu missing frame(s); %zu RGBA frames were buffered\n",
+                (unsigned long long)(next - pool_next_merged_seq_), pool_pending_.size());
+        pool_next_merged_seq_ = next;
+      }
+    }
     if (pool_pending_.count(pool_next_merged_seq_)) {
       auto it = pool_pending_.find(pool_next_merged_seq_);
       std::vector<uint8_t> pix = std::move(it->second);
