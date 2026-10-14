@@ -161,7 +161,8 @@ def _refresh_grid_dims_from_zmq(endpoint: str) -> None:
         return
     got = _peek_zmq_grid_dims(endpoint)
     if got is None:
-        _iq_status_detail = f"no ZeroMQ header on {endpoint}"
+        if _detected_iq_prb is None or _detected_iq_symbols is None:
+            _iq_status_detail = f"no ZeroMQ header on {endpoint}"
         return
     _detected_iq_prb, _detected_iq_symbols = got
     _iq_status_detail = ""
@@ -1838,6 +1839,56 @@ def _write_generator_producer_fps_shm_unlocked(fps: float) -> float:
     return v
 
 
+# resgrid_plotter sizes CUDA buffers at launch. A header that arrives after the
+# 5s startup peek is only logged; adopt that PRB×symbol size and restart once.
+_GRID_SIZE_MISMATCH_RE = re.compile(
+    r"prb[×x]sym=(\d+)[x×](\d+)\s*!=\s*plotter ncells=\d+"
+)
+_grid_resize_lock = threading.Lock()
+_grid_resize_inflight = False
+_grid_resize_applied: Optional[tuple[int, int]] = None
+
+
+def _note_plotter_grid_mismatch(line: str) -> None:
+    match = _GRID_SIZE_MISMATCH_RE.search(line)
+    if match is None:
+        return
+    prb, sym = int(match.group(1)), int(match.group(2))
+    if prb < 1 or sym < 1 or prb > 275 or sym > 14:
+        return
+    global _detected_iq_prb, _detected_iq_symbols, _iq_status_detail
+    global _grid_resize_inflight, _grid_resize_applied
+    with _grid_resize_lock:
+        if _grid_resize_inflight or _grid_resize_applied == (prb, sym):
+            return
+        _grid_resize_inflight = True
+        _grid_resize_applied = (prb, sym)
+        _detected_iq_prb = prb
+        _detected_iq_symbols = sym
+        _iq_status_detail = ""
+
+    def _run() -> None:
+        global _grid_resize_inflight, _grid_resize_applied
+        enc = _cuda_spawn_encoder_fps
+        _log.info(
+            "resource-grid header is %s×%s PRB×symbols; restarting plotter to match",
+            prb,
+            sym,
+        )
+        try:
+            stop_plotter_and_generators(plotter_only=True)
+            start_plotter_and_generators(plotter_only=True, plotter_encoder_fps=enc)
+        except Exception:
+            _log.exception("plotter grid-size restart failed")
+            with _grid_resize_lock:
+                _grid_resize_applied = None
+        finally:
+            with _grid_resize_lock:
+                _grid_resize_inflight = False
+
+    threading.Thread(target=_run, name="plotter-grid-resize", daemon=True).start()
+
+
 def _cuda_stderr_drain_loop(proc: subprocess.Popen) -> None:
     """Merge resgrid_plotter stderr (incl. FFmpeg) into shared FFmpeg progress stats."""
     if proc.stderr is None:
@@ -1859,12 +1910,14 @@ def _cuda_stderr_drain_loop(proc: subprocess.Popen) -> None:
                     _apply_progress_line(line)
                 else:
                     _log.info("plotter: %s", line)
+                    _note_plotter_grid_mismatch(line)
         tail = buf.strip()
         if tail:
             if "fps=" in tail and "frame=" in tail:
                 _apply_progress_line(tail)
             else:
                 _log.info("plotter: %s", tail)
+                _note_plotter_grid_mismatch(tail)
     except Exception:
         _log.exception("plotter stderr reader failed")
     finally:
