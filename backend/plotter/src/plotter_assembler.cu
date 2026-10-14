@@ -4,10 +4,15 @@
 #include "plotter_common.cuh"
 #include "plotter_assembler.cuh"
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstring>
 #include <errno.h>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -95,26 +100,6 @@ static void apply_slot_regions(std::vector<float2>& grid, std::vector<uint8_t>& 
   }
 }
 
-template <class Q>
-static void slot_fifo_finalize_to_q(std::vector<float2>& grid, std::vector<uint8_t>& chan_plane,
-                                     std::vector<uint32_t>& rnti_plane, int ncells, Q* outq,
-                                     const char* producer_tag) {
-  GridFrame gf;
-  gf.iq = std::move(grid);
-  gf.chan = std::move(chan_plane);
-  gf.cell_rnti = std::move(rnti_plane);
-  grid.assign((size_t)ncells, make_float2(0.f, 0.f));
-  chan_plane.assign((size_t)ncells, 0);
-  rnti_plane.assign((size_t)ncells, 0u);
-  g_stage_output_count_assembler.fetch_add(1, std::memory_order_relaxed);
-  outq->push(std::move(gf), producer_tag);
-}
-
-static void slot_fifo_finalize(std::vector<float2>& grid, std::vector<uint8_t>& chan_plane,
-                               std::vector<uint32_t>& rnti_plane, int ncells, AssembledSlotQueue* outq) {
-  slot_fifo_finalize_to_q(grid, chan_plane, rnti_plane, ncells, outq, "Assembler (slot FIFO)");
-}
-
 static SlotRegionDesc region_from_resource_grid_slot_hdr(const ResourceGridSlotIqHdr& h) {
   SlotRegionDesc r{};
   r.sym_start = h.sym_start;
@@ -136,10 +121,156 @@ static GridFrame make_zero_slot(int ncells) {
   return gf;
 }
 
+/** Visualization clock. Each tick is 1/24 s. */
+constexpr int kMinInputSlotHz = 24;
+
+/**
+ * 24 Hz thread beside a slot reader.
+ * A tick that already received a live slot does nothing.
+ * A tick with no new slot pushes the latest slot again (not counted as live input).
+ * Until the first real slot, the latest slot is an all-zero grid.
+ */
+class LatestSlotPacer {
+ public:
+  ~LatestSlotPacer() { stop(); }
+
+  template <class Q>
+  void start(Q* outq, const char* tag, GridFrame initial) {
+    stop();
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      latest_ = std::move(initial);
+      have_ = true;
+      holding_ = false;
+    }
+    arrived_.store(false, std::memory_order_relaxed);
+    push_ = [outq, tag](GridFrame gf) {
+      g_stage_output_count_assembler.fetch_add(1, std::memory_order_relaxed);
+      outq->push(std::move(gf), tag);
+    };
+    run_.store(true, std::memory_order_relaxed);
+    thr_ = std::thread([this] { loop(); });
+  }
+
+  void note_live(const GridFrame& gf) {
+    const bool real = !gf.placeholder;
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      const bool was_holding = holding_;
+      latest_ = gf;
+      have_ = true;
+      holding_ = false;
+      if (was_holding && real) {
+        fprintf(stderr, "resgrid_plotter: live slot resumed\n");
+        plotter_store_input_held(false);
+      }
+    }
+    arrived_.store(true, std::memory_order_release);
+  }
+
+  void stop() {
+    if (!thr_.joinable()) return;
+    run_.store(false, std::memory_order_relaxed);
+    cv_.notify_all();
+    thr_.join();
+    bool clear_held = false;
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      clear_held = holding_;
+      holding_ = false;
+    }
+    if (clear_held) plotter_store_input_held(false);
+  }
+
+ private:
+  void loop() {
+    using clock = std::chrono::steady_clock;
+    const auto period = std::chrono::microseconds(1000000 / kMinInputSlotHz);
+    auto next = clock::now();
+    fprintf(stderr, "resgrid_plotter: slot pace thread at %d Hz (repeat latest only when a tick has no new slot)\n",
+            kMinInputSlotHz);
+    while (run_.load(std::memory_order_relaxed) && g_run.load()) {
+      tick();
+      next += period;
+      const auto now = clock::now();
+      if (next <= now) next = now + period;
+      std::unique_lock<std::mutex> lk(mu_);
+      cv_.wait_until(lk, next, [&] {
+        return !run_.load(std::memory_order_relaxed) || !g_run.load();
+      });
+    }
+  }
+
+  void tick() {
+    /* This 1/24 s window already got a live slot. Leave it as the input. */
+    if (arrived_.exchange(false, std::memory_order_acq_rel)) return;
+    GridFrame copy;
+    bool begin_hold = false;
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      if (!have_ || arrived_.load(std::memory_order_acquire)) return;
+      copy = latest_;
+      begin_hold = !latest_.placeholder && !holding_;
+    }
+    if (arrived_.load(std::memory_order_acquire)) return;
+    if (begin_hold) {
+      std::lock_guard<std::mutex> lk(mu_);
+      if (!holding_) {
+        holding_ = true;
+        if (copy.has_timing)
+          fprintf(stderr,
+                  "resgrid_plotter: no new slot in 1/%d s — input latest slot again sfn=%u slot=%u\n",
+                  kMinInputSlotHz, (unsigned)copy.sfn, (unsigned)copy.slot);
+        else
+          fprintf(stderr, "resgrid_plotter: no new slot in 1/%d s — input latest slot again\n", kMinInputSlotHz);
+        plotter_store_input_held(true);
+      }
+    }
+    if (push_) push_(std::move(copy));
+  }
+
+  std::mutex mu_;
+  std::condition_variable cv_;
+  GridFrame latest_;
+  bool have_ = false;
+  bool holding_ = false;
+  std::atomic<bool> arrived_{false};
+  std::atomic<bool> run_{false};
+  std::function<void(GridFrame)> push_;
+  std::thread thr_;
+};
+
+template <class Q>
+static void slot_fifo_finalize_to_q(std::vector<float2>& grid, std::vector<uint8_t>& chan_plane,
+                                     std::vector<uint32_t>& rnti_plane, int ncells, Q* outq,
+                                     const char* producer_tag, LatestSlotPacer* pacer = nullptr) {
+  GridFrame gf;
+  gf.iq = std::move(grid);
+  gf.chan = std::move(chan_plane);
+  gf.cell_rnti = std::move(rnti_plane);
+  grid.assign((size_t)ncells, make_float2(0.f, 0.f));
+  chan_plane.assign((size_t)ncells, 0);
+  rnti_plane.assign((size_t)ncells, 0u);
+  if (pacer) pacer->note_live(gf);
+  g_stage_output_count_assembler.fetch_add(1, std::memory_order_relaxed);
+  outq->push(std::move(gf), producer_tag);
+}
+
+static void slot_fifo_finalize(std::vector<float2>& grid, std::vector<uint8_t>& chan_plane,
+                               std::vector<uint32_t>& rnti_plane, int ncells, AssembledSlotQueue* outq,
+                               LatestSlotPacer* pacer = nullptr) {
+  slot_fifo_finalize_to_q(grid, chan_plane, rnti_plane, ncells, outq, "Assembler (slot FIFO)", pacer);
+}
+
+
 static void slot_message_assembler_main(const std::string& path, int prb_dim, int sym_dim, int ncells,
-                                        AssembledSlotQueue* outq) {
-  /* No live slot yet: one all-zero grid so the encoder can start. Not counted as input. */
-  {
+                                        AssembledSlotQueue* outq, bool pace_latest) {
+  /* No IQ sidecar: this queue is the visualization input, so a 24 Hz thread repeats the latest slot. */
+  LatestSlotPacer pacer;
+  if (pace_latest) {
+    fprintf(stderr, "resgrid_plotter: no slot yet — generating a zero slot at %d Hz\n", kMinInputSlotHz);
+    pacer.start(outq, "Assembler (latest slot)", make_zero_slot(ncells));
+  } else {
     fprintf(stderr, "resgrid_plotter: no slot yet — generating a zero slot\n");
     g_stage_output_count_assembler.fetch_add(1, std::memory_order_relaxed);
     outq->push(make_zero_slot(ncells), "Assembler (zero slot)");
@@ -248,7 +379,7 @@ static void slot_message_assembler_main(const std::string& path, int prb_dim, in
                   "(expected %u; missing %u slot id(s))\n",
                   S, active_slot, active_slot + 1u, (unsigned)(S - active_slot - 1u));
       }
-      slot_fifo_finalize(grid, chan_plane, rnti_plane, ncells, outq);
+      slot_fifo_finalize(grid, chan_plane, rnti_plane, ncells, outq, pace_latest ? &pacer : nullptr);
       active_slot = S;
       std::fill(grid.begin(), grid.end(), make_float2(0.f, 0.f));
       std::fill(chan_plane.begin(), chan_plane.end(), 0);
@@ -258,7 +389,7 @@ static void slot_message_assembler_main(const std::string& path, int prb_dim, in
 
   slot_fifo_session_done:
     if (active_slot != 0xffffffffu)
-      slot_fifo_finalize(grid, chan_plane, rnti_plane, ncells, outq);
+      slot_fifo_finalize(grid, chan_plane, rnti_plane, ncells, outq, pace_latest ? &pacer : nullptr);
     mq.close();
     if (!g_run.load()) return;
     fprintf(stderr,
@@ -270,9 +401,9 @@ static void slot_message_assembler_main(const std::string& path, int prb_dim, in
 void resource_grid_slot_iq_fifo_reader_main(ResgridMqStreamIn* mq_in, int prb_dim, int sym_dim, int ncells,
                                             GridFrameQueue* outq) {
   fprintf(stderr, "resgrid_plotter: resource-grid slot-IQ stream → frame queue (cells=%d)\n", ncells);
-  fprintf(stderr, "resgrid_plotter: no slot yet — generating a zero slot\n");
-  g_stage_output_count_assembler.fetch_add(1, std::memory_order_relaxed);
-  outq->push(make_zero_slot(ncells), "Raster (zero slot)");
+  LatestSlotPacer pacer;
+  fprintf(stderr, "resgrid_plotter: no slot yet — generating a zero slot at %d Hz\n", kMinInputSlotHz);
+  pacer.start(outq, "Raster (latest slot)", make_zero_slot(ncells));
   ResgridMqStreamIn& mq = *mq_in;
   uint32_t active_slot = 0xffffffffu;
   std::vector<float2> grid((size_t)ncells, make_float2(0.f, 0.f));
@@ -334,7 +465,7 @@ void resource_grid_slot_iq_fifo_reader_main(ResgridMqStreamIn* mq_in, int prb_di
                 "resgrid_plotter: WARNING resource-grid slot-IQ slot_id gap: new %u after active %u (expected %u)\n", S,
                 active_slot, active_slot + 1u);
     }
-    slot_fifo_finalize_to_q(grid, chan_plane, rnti_plane, ncells, outq, "Raster (resource-grid slot IQ)");
+    slot_fifo_finalize_to_q(grid, chan_plane, rnti_plane, ncells, outq, "Raster (resource-grid slot IQ)", &pacer);
     active_slot = S;
     std::fill(grid.begin(), grid.end(), make_float2(0.f, 0.f));
     std::fill(chan_plane.begin(), chan_plane.end(), 0);
@@ -344,7 +475,7 @@ void resource_grid_slot_iq_fifo_reader_main(ResgridMqStreamIn* mq_in, int prb_di
 
 rg_slot_reader_done:
   if (active_slot != 0xffffffffu)
-    slot_fifo_finalize_to_q(grid, chan_plane, rnti_plane, ncells, outq, "Raster (resource-grid slot IQ)");
+    slot_fifo_finalize_to_q(grid, chan_plane, rnti_plane, ncells, outq, "Raster (resource-grid slot IQ)", &pacer);
   fprintf(stderr, "resgrid_plotter: resource-grid slot-IQ reader exiting (raster MQ thread)\n");
 }
 
@@ -384,10 +515,6 @@ IqFrameRead read_one_external_iq_frame_for(ResgridMqStreamIn* mq, int ncells, Gr
   return IqFrameRead::Frame;
 }
 
-/** Keep the slot queue at least this fast by copying the latest grid when the producer is slower. */
-constexpr int kMinInputSlotHz = 24;
-constexpr int kCopyLatestSlotMs = 1000 / kMinInputSlotHz;
-
 static void push_external_iq_frame(GridFrameQueue* outq, GridFrame gf, const char* producer_stage, bool count_as_input) {
   if (count_as_input) g_assembler_input_msgs.fetch_add(1, std::memory_order_relaxed);
   g_stage_output_count_assembler.fetch_add(1, std::memory_order_relaxed);
@@ -395,45 +522,20 @@ static void push_external_iq_frame(GridFrameQueue* outq, GridFrame gf, const cha
 }
 
 /** Full-grid MQ reader: each logical frame is one complete I/Q grid (pipeline 2 or channel-mode IQ sidecar).
- *  Until the first real slot, an all-zero grid is copied so the raster stays at 24 slot/s.
- *  After that, gaps longer than 1/24 s copy the latest real slot. Copies are not counted as live input. */
+ *  A 24 Hz thread repeats the latest grid only on ticks with no new slot. Copies are not counted as live input. */
 void external_grid_frame_reader_main(ResgridMqStreamIn* mq, int ncells, GridFrameQueue* outq, const char* producer_stage) {
   fprintf(stderr, "resgrid_plotter: external IQ reader → frame queue (cells=%d)\n", ncells);
-  GridFrame last = make_zero_slot(ncells);
-  bool have_last = true;
-  bool holding = true;
+  LatestSlotPacer pacer;
   fprintf(stderr, "resgrid_plotter: no slot yet — generating a zero slot at %d Hz\n", kMinInputSlotHz);
-  push_external_iq_frame(outq, last, producer_stage, false);
+  pacer.start(outq, producer_stage, make_zero_slot(ncells));
   while (g_run.load()) {
     GridFrame gf;
-    const int timeout_ms = have_last ? kCopyLatestSlotMs : -1;
-    const IqFrameRead got = read_one_external_iq_frame_for(mq, ncells, gf, timeout_ms);
-    if (got == IqFrameRead::End) break;
-    if (got == IqFrameRead::Timeout) {
-      if (!have_last) continue;
-      if (!holding) {
-        if (last.has_timing)
-          fprintf(stderr,
-                  "resgrid_plotter: input below %d slot/s — copying last slot sfn=%u slot=%u\n",
-                  kMinInputSlotHz, (unsigned)last.sfn, (unsigned)last.slot);
-        else
-          fprintf(stderr, "resgrid_plotter: input below %d slot/s — copying last slot\n", kMinInputSlotHz);
-      }
-      holding = true;
-      if (!last.placeholder) plotter_store_input_held(true);
-      push_external_iq_frame(outq, last, producer_stage, false);
-      continue;
-    }
-    if (holding && !last.placeholder) {
-      fprintf(stderr, "resgrid_plotter: live slot resumed\n");
-      plotter_store_input_held(false);
-    }
-    holding = false;
-    last = gf;
-    have_last = true;
+    const IqFrameRead got = read_one_external_iq_frame_for(mq, ncells, gf, -1);
+    if (got != IqFrameRead::Frame) break;
+    pacer.note_live(gf);
     push_external_iq_frame(outq, std::move(gf), producer_stage, true);
   }
-  if (holding) plotter_store_input_held(false);
+  pacer.stop();
 }
 
 static bool iq_endpoint_is_zmq(const char* path)
@@ -508,7 +610,8 @@ void AssemblerStage::assembler_run() {
     workers.emplace_back(run_internal_synthetic_producer_loop, internal_q_, fps_base_, fps_, ncells_, prb_, sym_);
   }
   if (have_fapi_path) {
-    workers.emplace_back(slot_message_assembler_main, *fapi_fifo_path_, prb_, sym_, ncells_, slot_assembled_q_);
+    workers.emplace_back(slot_message_assembler_main, *fapi_fifo_path_, prb_, sym_, ncells_, slot_assembled_q_,
+                         !have_sidecar);
   }
   if (have_sidecar) {
     workers.emplace_back(external_grid_frame_reader_main, iq_mq_sidecar_, ncells_,

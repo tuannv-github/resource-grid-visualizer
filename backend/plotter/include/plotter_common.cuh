@@ -62,11 +62,11 @@ extern std::atomic<uint64_t> g_rgba_frame_queue_drops;
 extern std::atomic<uint64_t> g_raster_work_queue_drops;
 extern std::atomic<uint64_t> g_capturer_frame_queue_drops;
 extern std::atomic<uint64_t> g_assembler_input_msgs;
-/** 1 while the IQ reader is copying the last real slot because the live input is below 24 slot/s. */
+/** 1 while a 24 Hz tick found no new slot and the latest real slot was fed again. */
 extern std::atomic<uint32_t> g_input_held;
 /** CUDA control SHM mapped by the plotter; null before launch and after shutdown. */
 extern void* g_plotter_fps_shm;
-/** uint32 in the CUDA control SHM: 1 = copying the last slot to hold 24 slot/s. Bytes 376…379 (after capturer stop @372). */
+/** uint32 in the CUDA control SHM: 1 = a 24 Hz tick repeated the latest slot. Bytes 376…379 (after capturer stop @372). */
 inline constexpr size_t kShmInputHeldOff = 376;
 
 inline void plotter_store_input_held(bool held) {
