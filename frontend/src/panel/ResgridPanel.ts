@@ -93,6 +93,7 @@ export class ResgridPanel {
   private metricIq: HTMLElement | null = null;
   private metricPlayback: HTMLElement | null = null;
   private inputHeld = false;
+  private inputRateLow = false;
   private playbackMediaState = "warn";
   private pubGenFapi: HTMLElement;
   private btnPlotterStart: HTMLButtonElement;
@@ -160,8 +161,8 @@ export class ResgridPanel {
     });
   }
 
-  /** Full-uplink 7D1S2U at 30 kHz is 400 slot/s. Below this the plot line warns. */
-  private static readonly SLOW_INPUT_HZ = 50;
+  /** Below this the picture repeats the latest slot and the plot line warns. */
+  private static readonly SLOW_INPUT_HZ = 24;
 
   private ensureInputFps(): HTMLElement | null {
     if (!this.mediaStatus) return null;
@@ -192,8 +193,7 @@ export class ResgridPanel {
       s.iq_prb != null && s.iq_symbols != null ? `${s.iq_prb} PRB × ${s.iq_symbols} symbols` : "—";
     let state = "—";
     if (s.generating) {
-      if (this.inputHeld) state = "Replaying last slot";
-      else if (inputWarn) state = "Slow";
+      if (inputWarn) state = "Low input";
       else state = "Live";
     } else if (s.cuda_plotter_active) {
       state = "Plotter idle";
@@ -218,7 +218,9 @@ export class ResgridPanel {
   }
 
   private paintMediaStatus(): void {
-    if (this.mediaStatus) this.mediaStatus.dataset.state = this.inputHeld ? "warn" : this.playbackMediaState;
+    if (this.mediaStatus)
+      this.mediaStatus.dataset.state =
+        this.inputHeld || this.inputRateLow ? "warn" : this.playbackMediaState;
   }
 
   private shortPlayback(text: string): string {
@@ -424,11 +426,11 @@ export class ResgridPanel {
     const inputKnown = inputFps != null && !Number.isNaN(inputFps);
     const inputSlow =
       !!s.generating && inputKnown && inputFps < ResgridPanel.SLOW_INPUT_HZ;
-    const inputWarn = this.inputHeld || inputSlow;
+    this.inputRateLow = inputSlow;
+    const inputWarn = inputSlow || (!inputKnown && this.inputHeld);
     const inputLabel = inputKnown ? `${inputFps.toFixed(1)} /s` : "—";
     let inputText = `Input ${inputLabel}`;
-    if (this.inputHeld) inputText += " — replaying last slot";
-    else if (inputSlow) inputText += " — slow";
+    if (inputWarn) inputText += " — low input rate";
     if (this.mediaStatusInput) {
       this.mediaStatusInput.textContent = s.generating ? inputText : "Input —";
       if (inputWarn && s.generating) this.mediaStatusInput.dataset.state = "warn";
@@ -440,8 +442,9 @@ export class ResgridPanel {
       else delete this.pubInputFps.dataset.state;
     }
     if (this.mediaStatusHeld) {
-      this.mediaStatusHeld.hidden = !this.inputHeld;
-      this.mediaStatusHeld.textContent = this.inputHeld ? "No new slot — replaying last slot" : "";
+      const showHeld = !!s.generating && inputWarn;
+      this.mediaStatusHeld.hidden = !showHeld;
+      this.mediaStatusHeld.textContent = showHeld ? "Low input rate — showing latest slot" : "";
     }
     this.renderGridTable(s, inputKnown ? inputLabel : "—", inputWarn);
     this.paintMediaStatus();

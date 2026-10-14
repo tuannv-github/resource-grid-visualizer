@@ -62,11 +62,11 @@ extern std::atomic<uint64_t> g_rgba_frame_queue_drops;
 extern std::atomic<uint64_t> g_raster_work_queue_drops;
 extern std::atomic<uint64_t> g_capturer_frame_queue_drops;
 extern std::atomic<uint64_t> g_assembler_input_msgs;
-/** 1 while the IQ reader is replaying the last real slot because no newer slot arrived. */
+/** 1 while the IQ reader is copying the last real slot because the live input is below 24 slot/s. */
 extern std::atomic<uint32_t> g_input_held;
 /** CUDA control SHM mapped by the plotter; null before launch and after shutdown. */
 extern void* g_plotter_fps_shm;
-/** uint32 in the CUDA control SHM: 1 = replaying the last slot at 1 Hz. Bytes 376…379 (after capturer stop @372). */
+/** uint32 in the CUDA control SHM: 1 = copying the last slot to hold 24 slot/s. Bytes 376…379 (after capturer stop @372). */
 inline constexpr size_t kShmInputHeldOff = 376;
 
 inline void plotter_store_input_held(bool held) {
@@ -126,6 +126,8 @@ struct GridFrame {
   bool has_timing = false;
   uint16_t sfn = 0;
   uint16_t slot = 0;
+  /** Synthetic all-zero grid used only until the first real slot. Dropped once live data exists. */
+  bool placeholder = false;
 };
 
 /** Last completed slot's per-cell PHY metadata; reapplied to IQ sidecar frames so display does not alternate tint vs Viridis. */

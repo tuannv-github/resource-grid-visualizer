@@ -127,8 +127,23 @@ static SlotRegionDesc region_from_resource_grid_slot_hdr(const ResourceGridSlotI
   return r;
 }
 
+static GridFrame make_zero_slot(int ncells) {
+  GridFrame gf;
+  gf.iq.assign((size_t)ncells, make_float2(0.f, 0.f));
+  gf.chan.assign((size_t)ncells, 0);
+  gf.cell_rnti.assign((size_t)ncells, 0u);
+  gf.placeholder = true;
+  return gf;
+}
+
 static void slot_message_assembler_main(const std::string& path, int prb_dim, int sym_dim, int ncells,
                                         AssembledSlotQueue* outq) {
+  /* No live slot yet: one all-zero grid so the encoder can start. Not counted as input. */
+  {
+    fprintf(stderr, "resgrid_plotter: no slot yet — generating a zero slot\n");
+    g_stage_output_count_assembler.fetch_add(1, std::memory_order_relaxed);
+    outq->push(make_zero_slot(ncells), "Assembler (zero slot)");
+  }
   /* Re-open read side after errors so a later writer (e.g. restarted generator) can attach again. */
   while (g_run.load()) {
     fprintf(stderr, "resgrid_plotter: waiting for FAPI / slot MQ writer on %s\n", path.c_str());
@@ -255,6 +270,9 @@ static void slot_message_assembler_main(const std::string& path, int prb_dim, in
 void resource_grid_slot_iq_fifo_reader_main(ResgridMqStreamIn* mq_in, int prb_dim, int sym_dim, int ncells,
                                             GridFrameQueue* outq) {
   fprintf(stderr, "resgrid_plotter: resource-grid slot-IQ stream → frame queue (cells=%d)\n", ncells);
+  fprintf(stderr, "resgrid_plotter: no slot yet — generating a zero slot\n");
+  g_stage_output_count_assembler.fetch_add(1, std::memory_order_relaxed);
+  outq->push(make_zero_slot(ncells), "Raster (zero slot)");
   ResgridMqStreamIn& mq = *mq_in;
   uint32_t active_slot = 0xffffffffu;
   std::vector<float2> grid((size_t)ncells, make_float2(0.f, 0.f));
@@ -366,25 +384,29 @@ IqFrameRead read_one_external_iq_frame_for(ResgridMqStreamIn* mq, int ncells, Gr
   return IqFrameRead::Frame;
 }
 
-/** Replay the last real grid at this interval when the producer goes quiet, so the encoder pipe stays open. */
-constexpr int kReplayLastSlotMs = 1000;
+/** Keep the slot queue at least this fast by copying the latest grid when the producer is slower. */
+constexpr int kMinInputSlotHz = 24;
+constexpr int kCopyLatestSlotMs = 1000 / kMinInputSlotHz;
 
-static void push_external_iq_frame(GridFrameQueue* outq, GridFrame gf, const char* producer_stage) {
-  g_assembler_input_msgs.fetch_add(1, std::memory_order_relaxed);
+static void push_external_iq_frame(GridFrameQueue* outq, GridFrame gf, const char* producer_stage, bool count_as_input) {
+  if (count_as_input) g_assembler_input_msgs.fetch_add(1, std::memory_order_relaxed);
   g_stage_output_count_assembler.fetch_add(1, std::memory_order_relaxed);
   outq->push(std::move(gf), producer_stage);
 }
 
 /** Full-grid MQ reader: each logical frame is one complete I/Q grid (pipeline 2 or channel-mode IQ sidecar).
- *  After the first real slot, a quiet producer is filled with that slot once per second. */
+ *  Until the first real slot, an all-zero grid is copied so the raster stays at 24 slot/s.
+ *  After that, gaps longer than 1/24 s copy the latest real slot. Copies are not counted as live input. */
 void external_grid_frame_reader_main(ResgridMqStreamIn* mq, int ncells, GridFrameQueue* outq, const char* producer_stage) {
   fprintf(stderr, "resgrid_plotter: external IQ reader → frame queue (cells=%d)\n", ncells);
-  GridFrame last;
-  bool have_last = false;
-  bool holding = false;
+  GridFrame last = make_zero_slot(ncells);
+  bool have_last = true;
+  bool holding = true;
+  fprintf(stderr, "resgrid_plotter: no slot yet — generating a zero slot at %d Hz\n", kMinInputSlotHz);
+  push_external_iq_frame(outq, last, producer_stage, false);
   while (g_run.load()) {
     GridFrame gf;
-    const int timeout_ms = have_last ? kReplayLastSlotMs : -1;
+    const int timeout_ms = have_last ? kCopyLatestSlotMs : -1;
     const IqFrameRead got = read_one_external_iq_frame_for(mq, ncells, gf, timeout_ms);
     if (got == IqFrameRead::End) break;
     if (got == IqFrameRead::Timeout) {
@@ -392,24 +414,24 @@ void external_grid_frame_reader_main(ResgridMqStreamIn* mq, int ncells, GridFram
       if (!holding) {
         if (last.has_timing)
           fprintf(stderr,
-                  "resgrid_plotter: no new slot for %d ms — replaying last slot sfn=%u slot=%u at 1 Hz\n",
-                  kReplayLastSlotMs, (unsigned)last.sfn, (unsigned)last.slot);
+                  "resgrid_plotter: input below %d slot/s — copying last slot sfn=%u slot=%u\n",
+                  kMinInputSlotHz, (unsigned)last.sfn, (unsigned)last.slot);
         else
-          fprintf(stderr, "resgrid_plotter: no new slot for %d ms — replaying last slot at 1 Hz\n", kReplayLastSlotMs);
+          fprintf(stderr, "resgrid_plotter: input below %d slot/s — copying last slot\n", kMinInputSlotHz);
       }
       holding = true;
-      plotter_store_input_held(true);
-      push_external_iq_frame(outq, last, producer_stage);
+      if (!last.placeholder) plotter_store_input_held(true);
+      push_external_iq_frame(outq, last, producer_stage, false);
       continue;
     }
-    if (holding) {
+    if (holding && !last.placeholder) {
       fprintf(stderr, "resgrid_plotter: live slot resumed\n");
       plotter_store_input_held(false);
     }
     holding = false;
     last = gf;
     have_last = true;
-    push_external_iq_frame(outq, std::move(gf), producer_stage);
+    push_external_iq_frame(outq, std::move(gf), producer_stage, true);
   }
   if (holding) plotter_store_input_held(false);
 }

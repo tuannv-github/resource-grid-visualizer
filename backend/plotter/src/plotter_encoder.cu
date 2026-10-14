@@ -146,6 +146,8 @@ struct EncoderStage::Impl {
         bool popped = false;
         while (g_run.load(std::memory_order_relaxed) && rgba_q->try_pop(popb)) {
           popped = true;
+          last_enc_rgba = popb;
+          last_enc_valid = true;
           if (!write_rgba_locked(popb.data(), popb.size())) {
             g_run = false;
             break;
@@ -155,6 +157,12 @@ struct EncoderStage::Impl {
         const auto now_ff = std::chrono::steady_clock::now();
         const bool slot_idle = (ec->fapi_slot_path || ec->resource_grid_slot_iq_stream) && !popped;
         if (now_ff >= next_enc) {
+          if (slot_idle && last_enc_valid) {
+            if (!write_rgba_locked(last_enc_rgba.data(), last_enc_rgba.size())) {
+              g_run = false;
+              break;
+            }
+          }
           next_enc += enc_period;
           while (next_enc <= std::chrono::steady_clock::now()) next_enc += enc_period;
         } else if (slot_idle) {
@@ -186,7 +194,6 @@ struct EncoderStage::Impl {
 
         const auto now = std::chrono::steady_clock::now();
         if (now >= next_enc) {
-          bool wrote_mean_this_tick = false;
           if (ec->enc_pol == EncodePolicy::Mean && ec->rgba_mean_count > 0) {
             const uint64_t n = ec->rgba_mean_count;
             const float inv = 1.0f / (float)n;
@@ -203,11 +210,11 @@ struct EncoderStage::Impl {
             std::fill(ec->mean_acc_a.begin(), ec->mean_acc_a.end(), 0u);
             ec->rgba_mean_count = 0;
             last_enc_valid = true;
-            wrote_mean_this_tick = true;
           }
-          const bool blank_tick =
-              (ec->fapi_slot_path || ec->resource_grid_slot_iq_stream) && !any_pop && !wrote_mean_this_tick;
-          if (!blank_tick && last_enc_valid) {
+          /* A slot stream slower than encoder_fps used to skip the tick. FFmpeg then
+           * stalls and the player freezes. Repeat the latest RGBA so stdin stays at
+           * encoder_fps (default 24). Live input rate is unchanged, so the UI can warn. */
+          if (last_enc_valid) {
             if (!write_rgba_locked(last_enc_rgba.data(), last_enc_rgba.size())) {
               g_run = false;
               break;

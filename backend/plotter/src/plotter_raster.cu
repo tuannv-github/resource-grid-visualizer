@@ -7,8 +7,18 @@
 #include "viridis_lut.inc"
 #include "font8x8_basic.inc"
 
+#include <atomic>
 #include <thread>
 #include <vector>
+
+/** True after a non-placeholder slot has been accepted. Later zero-slot placeholders are dropped. */
+static std::atomic<bool> g_saw_live_slot{false};
+
+static bool accept_acquired_frame(const GridFrame& gf) {
+  if (gf.placeholder && g_saw_live_slot.load(std::memory_order_relaxed)) return false;
+  if (!gf.placeholder) g_saw_live_slot.store(true, std::memory_order_relaxed);
+  return true;
+}
 
 /** Implemented in `plotter_assembler.cu`; used here for standalone ``--mq-resource-grid`` (raster-owned MQ thread). */
 void external_grid_frame_reader_main(ResgridMqStreamIn* mq, int ncells, GridFrameQueue* outq, const char* producer_stage);
@@ -452,26 +462,26 @@ bool pop_merged_assembled_or_sidecar_iq(AssembledSlotQueue* assembled, GridFrame
     gf.cell_rnti = last_slot_meta->cell_rnti;
   };
 
-  if (assembled->try_pop(gf)) {
+  if (assembled->try_pop(gf) && accept_acquired_frame(gf)) {
     capture_meta();
     return true;
   }
-  if (iq_q && iq_q->try_pop(gf)) {
+  if (iq_q && iq_q->try_pop(gf) && accept_acquired_frame(gf)) {
     merge_sidecar_meta();
     return true;
   }
   if (iq_q) {
-    if (assembled->pop_wait(gf, 80)) {
+    if (assembled->pop_wait(gf, 80) && accept_acquired_frame(gf)) {
       capture_meta();
       return true;
     }
-    if (iq_q->pop(gf, 80)) {
+    if (iq_q->pop(gf, 80) && accept_acquired_frame(gf)) {
       merge_sidecar_meta();
       return true;
     }
     return false;
   }
-  if (assembled->pop_wait(gf, 400)) {
+  if (assembled->pop_wait(gf, 400) && accept_acquired_frame(gf)) {
     capture_meta();
     return true;
   }

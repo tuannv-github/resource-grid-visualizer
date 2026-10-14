@@ -653,7 +653,7 @@ _SHM_CAPTURER_QUEUE_DEPTH_OFF = 360
 _SHM_CAPTURER_QUEUE_CAP_OFF = 364
 _SHM_CAPTURER_JPEG_THREADS_OFF = 368
 _SHM_CAPTURER_STOP_OFF = 372
-# uint32 written by resgrid_plotter: 1 while the last real slot is replayed at 1 Hz.
+# uint32 written by resgrid_plotter: 1 while the last real slot is copied to hold 24 slot/s.
 _SHM_INPUT_HELD_OFF = 376
 _frame_re = re.compile(r"frame=\s*(\d+)")
 _fps_re = re.compile(r"fps=\s*([\d.]+)")
@@ -752,8 +752,8 @@ class PlotterStatus(BaseModel):
     input_held: bool = Field(
         default=False,
         description=(
-            "True after at least one resource-grid slot was received and no newer slot arrived for 1 s. "
-            "The plotter replays that slot at 1 Hz so the encoder pipe stays open."
+            "True while the plotter is copying the latest resource-grid slot because the live input "
+            "is slower than 24 slot/s. Copies keep the picture moving; they are not counted as live input."
         ),
     )
     capturer_capable: bool = False
