@@ -498,6 +498,51 @@ bool acquire_frame_for_interpolate(InternalFrameQueue* internal_q, FullGridFifoQ
   return false;
 }
 
+/** Stroke ``boxes`` from the resource-grid header. PRB 0 is the bottom row; symbols run left to right. */
+static void overlay_grid_boxes_on_rgba(uint8_t* rgba, int fw, int fh, const std::vector<GridBox>& boxes, int prb, int sym,
+                                       int sym_start, int sym_count, int off_x, int off_y, int content_w, int content_h) {
+  if (boxes.empty() || prb < 1 || sym < 1 || sym_count < 1 || content_w < 1 || content_h < 1) return;
+  int stroke = content_w / (sym_count * 4);
+  if (stroke < 2) stroke = 2;
+  if (stroke > 4) stroke = 4;
+  const uint8_t br = 255;
+  const uint8_t bg = 196;
+  const uint8_t bb = 64;
+  const unsigned alpha = 235u;
+  for (const GridBox& box : boxes) {
+    if (box.prb_count == 0 || box.sym_count == 0) continue;
+    int p0 = static_cast<int>(box.prb_start);
+    int p1 = p0 + static_cast<int>(box.prb_count);
+    if (p0 < 0) p0 = 0;
+    if (p1 > prb) p1 = prb;
+    if (p0 >= p1) continue;
+    int s0 = std::max(static_cast<int>(box.sym_start), sym_start);
+    int s1 = std::min(static_cast<int>(box.sym_start) + static_cast<int>(box.sym_count), sym_start + sym_count);
+    s0 = std::max(s0, 0);
+    s1 = std::min(s1, sym);
+    if (s0 >= s1) continue;
+    const int vs0 = s0 - sym_start;
+    const int vs1 = s1 - sym_start;
+    const int lx0 = resgrid_cell_lx0(vs0, sym_count, content_w);
+    const int lx1 = resgrid_cell_lx1_excl(vs1 - 1, sym_count, content_w);
+    int top0 = 0;
+    int top1 = 0;
+    int bot0 = 0;
+    int bot1 = 0;
+    resgrid_cell_ly_range(p1 - 1, prb, content_h, &top0, &top1);
+    resgrid_cell_ly_range(p0, prb, content_h, &bot0, &bot1);
+    const int fx0 = off_x + lx0;
+    const int fx1 = off_x + lx1;
+    const int fy0 = off_y + top0;
+    const int fy1 = off_y + bot1;
+    if (fx1 <= fx0 || fy1 <= fy0) continue;
+    resgrid_frame_hline_stroke(rgba, fw, fh, fx0, fx1, fy0, stroke, 1, br, bg, bb, alpha);
+    resgrid_frame_hline_stroke(rgba, fw, fh, fx0, fx1, fy1 - 1, stroke, -1, br, bg, bb, alpha);
+    resgrid_frame_vline_stroke(rgba, fw, fh, fx0, fy0, fy1, stroke, 1, br, bg, bb, alpha);
+    resgrid_frame_vline_stroke(rgba, fw, fh, fx1 - 1, fy0, fy1, stroke, -1, br, bg, bb, alpha);
+  }
+}
+
 /** CUDA interpolate (mag + tint) → host RGBA + CPU overlays (encoder input buffer).
  *  `sym_start` / `sym_count` crop the raster to the visible symbol window. */
 void render_frame_rgba(const GridFrame& gf, float2* d_z, float* d_mag, uint8_t* d_chan, uint32_t* d_cell_rnti,
@@ -554,6 +599,9 @@ void render_frame_rgba(const GridFrame& gf, float2* d_z, float* d_mag, uint8_t* 
     }
     draw_text_line(h_rgba.data(), frame_w, frame_h, x0 + pad, y0 + pad, timing, scale, 252, 252, 245);
   }
+  if (!gf.boxes.empty())
+    overlay_grid_boxes_on_rgba(h_rgba.data(), frame_w, frame_h, gf.boxes, prb, sym, sym_start, sym_count, off_x, off_y,
+                               content_w, content_h);
 }
 
 void fill_synthetic_iq(std::vector<float2>& out, std::vector<uint8_t>& chan, std::vector<uint32_t>& cell_rnti,

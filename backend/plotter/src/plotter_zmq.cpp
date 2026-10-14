@@ -38,7 +38,35 @@ struct ParsedResgridHeader {
   uint16_t sfn = 0;
   uint16_t slot = 0;
   bool has_timing = false;
+  std::vector<GridBox> boxes;
 };
+
+/** ``boxes=prb:nprb:sym:nsym,prb:nprb:sym:nsym``. Malformed items are skipped. */
+void parse_boxes(const std::string& value, std::vector<GridBox>& out)
+{
+  out.clear();
+  size_t i = 0;
+  while (i < value.size() && out.size() < 64) {
+    unsigned prb = 0;
+    unsigned nprb = 0;
+    unsigned sym = 0;
+    unsigned nsym = 0;
+    int consumed = 0;
+    if (std::sscanf(value.c_str() + i, "%u:%u:%u:%u%n", &prb, &nprb, &sym, &nsym, &consumed) != 4 || consumed < 7)
+      break;
+    if (prb <= 65535u && nprb >= 1u && nprb <= 65535u && sym <= 65535u && nsym >= 1u && nsym <= 65535u) {
+      GridBox box;
+      box.prb_start = static_cast<uint16_t>(prb);
+      box.prb_count = static_cast<uint16_t>(nprb);
+      box.sym_start = static_cast<uint16_t>(sym);
+      box.sym_count = static_cast<uint16_t>(nsym);
+      out.push_back(box);
+    }
+    i += static_cast<size_t>(consumed);
+    if (i < value.size() && value[i] == ',') ++i;
+    else break;
+  }
+}
 
 bool parse_header(const zmq::message_t& hdr, ParsedResgridHeader& out)
 {
@@ -70,6 +98,8 @@ bool parse_header(const zmq::message_t& hdr, ParsedResgridHeader& out)
     } else if (key == "slot") {
       out.slot = static_cast<uint16_t>(n);
       got_slot = true;
+    } else if (key == "boxes") {
+      parse_boxes(val, out.boxes);
     }
   }
   out.has_timing = got_sfn && got_slot;
@@ -131,6 +161,7 @@ bool ResgridZmqStreamIn::open_read(const char* path)
   sfn_ = 0;
   slot_ = 0;
   has_timing_ = false;
+  boxes_.clear();
   const std::string endpoint = connect_endpoint(path);
   if (endpoint.rfind("ipc://", 0) != 0 && endpoint.rfind("tcp://", 0) != 0 && endpoint.rfind("inproc://", 0) != 0) {
     std::fprintf(stderr, "resgrid_plotter: IQ ZeroMQ address must be ipc:// or tcp:// (got %s)\n", path ? path : "(null)");
@@ -183,9 +214,11 @@ bool ResgridZmqStreamIn::pump_one_frame(std::chrono::steady_clock::time_point de
         const auto got_body = impl_->sub.recv(body, zmq::recv_flags::none);
         if (!got_body) return false;
         ParsedResgridHeader parsed;
+        boxes_.clear();
         if (parse_header(first, parsed)) {
           prb_ = parsed.prb;
           symbols_ = parsed.symbols;
+          boxes_ = std::move(parsed.boxes);
           has_timing_ = parsed.has_timing;
           if (parsed.has_timing) {
             sfn_ = parsed.sfn;

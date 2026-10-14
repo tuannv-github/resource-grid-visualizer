@@ -7,6 +7,14 @@
 #include <memory>
 #include <vector>
 
+/** One rectangle on a resource-grid slot. Wire form is ``prb:nprb:sym:nsym``. */
+struct GridBox {
+  uint16_t prb_start = 0;
+  uint16_t prb_count = 0;
+  uint16_t sym_start = 0;
+  uint16_t sym_count = 0;
+};
+
 struct ResgridMqChunkHdr {
   uint32_t magic;
   uint32_t version;
@@ -57,6 +65,11 @@ class ResgridMqStreamIn {
     (void)slot;
     return false;
   }
+  /** Rectangles from the latest ``boxes=`` field. Empty when the header omitted it. */
+  virtual const std::vector<GridBox>& last_frame_boxes() const {
+    static const std::vector<GridBox> none;
+    return none;
+  }
 
  private:
   /** **deadline** of **time_point::max()** waits until a frame or an error. */
@@ -88,8 +101,9 @@ bool resgrid_mq_send_frame(int wq, const void* data, size_t len, uint32_t frame_
 
 /**
  * Resource-grid IQ over ZeroMQ SUB. ``path`` is a full address (``ipc://`` or ``tcp://``).
- * Each message is two parts: a text header (``resgrid_nai seq=1 prb=133 symbols=14 bytes=N sfn=512 slot=7``) and raw float32 IQ.
- * Images and FAPI stay on POSIX mq.
+ * Each message is two parts: a text header
+ * (``resgrid_nai seq=1 prb=133 symbols=14 bytes=N sfn=512 slot=7 boxes=26:57:0:14``)
+ * and raw float32 IQ. ``boxes`` is optional. Images and FAPI stay on POSIX mq.
  */
 class ResgridZmqStreamIn : public ResgridMqStreamIn {
  public:
@@ -108,6 +122,7 @@ class ResgridZmqStreamIn : public ResgridMqStreamIn {
     slot = slot_;
     return true;
   }
+  const std::vector<GridBox>& last_frame_boxes() const override { return boxes_; }
 
  private:
   struct Impl;
@@ -119,6 +134,7 @@ class ResgridZmqStreamIn : public ResgridMqStreamIn {
   uint16_t sfn_ = 0;
   uint16_t slot_ = 0;
   bool has_timing_ = false;
+  std::vector<GridBox> boxes_{};
   bool ok_ = false;
 
   bool pump_one_frame(std::chrono::steady_clock::time_point deadline, bool* timed_out);

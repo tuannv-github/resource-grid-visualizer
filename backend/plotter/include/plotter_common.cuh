@@ -117,6 +117,8 @@ inline uint8_t plotter_linear_f_to_srgb_u8(float x) {
   return (uint8_t)std::lrint(s * 255.0f);
 }
 
+#include "plotter_posix_mq.cuh"
+
 struct GridFrame {
   std::vector<float2> iq;
   std::vector<uint8_t> chan;
@@ -126,6 +128,8 @@ struct GridFrame {
   bool has_timing = false;
   uint16_t sfn = 0;
   uint16_t slot = 0;
+  /** Rectangles from the ZeroMQ ``boxes=`` field. Empty when the header omitted it. */
+  std::vector<GridBox> boxes;
   /** Synthetic all-zero grid used only until the first real slot. Dropped once live data exists. */
   bool placeholder = false;
 };

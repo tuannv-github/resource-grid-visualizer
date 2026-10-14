@@ -487,6 +487,7 @@ IqFrameRead read_one_external_iq_frame_for(ResgridMqStreamIn* mq, int ncells, Gr
   gf.chan.assign((size_t)ncells, 0);
   gf.cell_rnti.clear();
   gf.has_timing = false;
+  gf.boxes.clear();
   bool timed_out = false;
   if (!mq->read_exact_for(gf.iq.data(), (size_t)ncells * sizeof(float2), "iq-mq full-grid payload", timeout_ms,
                           &timed_out)) {
@@ -500,6 +501,7 @@ IqFrameRead read_one_external_iq_frame_for(ResgridMqStreamIn* mq, int ncells, Gr
     gf.sfn = sfn;
     gf.slot = slot;
   }
+  gf.boxes = mq->last_frame_boxes();
   const uint16_t hp = mq->last_frame_prb();
   const uint16_t hs = mq->last_frame_symbols();
   if (hp > 0u && hs > 0u) {
