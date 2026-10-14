@@ -13,9 +13,9 @@ if [[ ${1:-} == -h || ${1:-} == --help ]]; then
 fi
 
 if docker compose version >/dev/null 2>&1; then
-  dc() { docker compose -f docker-compose.rxnai.yaml "$@"; }
+  dc() { docker compose -p rgv -f docker-compose.rxnai.yaml "$@"; }
 elif command -v docker-compose >/dev/null 2>&1; then
-  dc() { docker-compose -f docker-compose.rxnai.yaml "$@"; }
+  dc() { docker-compose -p rgv -f docker-compose.rxnai.yaml "$@"; }
 else
   echo "docker compose is not installed" >&2
   exit 1

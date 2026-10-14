@@ -4,7 +4,6 @@
 services:
   mediamtx:
     image: bluenviron/mediamtx:latest-ffmpeg
-    container_name: mediamtx-rxnai
     network_mode: host
     environment:
       MTX_WEBRTCADDITIONALHOSTS: ${MTX_WEBRTC_ADDITIONAL_HOSTS:-}

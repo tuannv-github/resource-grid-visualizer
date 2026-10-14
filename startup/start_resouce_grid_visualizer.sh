@@ -16,4 +16,4 @@ if [[ ! -f "$ENV_FILE" ]]; then
 fi
 
 cd "$COMPOSE_DIR"
-exec docker compose -f docker-compose.rxnai.yaml up --build "$@"
+exec docker compose -p rgv -f docker-compose.rxnai.yaml up --build "$@"
