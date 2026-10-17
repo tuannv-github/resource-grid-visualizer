@@ -933,9 +933,24 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* Match plotter: PRB 0 at bottom of heatmap; tick list is ascending indices top→bottom in DOM — reverse to align. */
+/* Match plotter: PRB 0 at the bottom. Each label is placed on that PRB, every 5. */
 .video-axes[data-iq-visible="true"] .va-symbol-ticks {
-  flex-direction: column-reverse;
+  position: relative;
+  display: block;
+  font-size: 0.58rem;
+  line-height: 1;
+}
+.video-axes[data-iq-visible="true"] .va-symbol-ticks span {
+  position: absolute;
+  right: 0;
+  transform: translateY(50%);
+  line-height: 1;
+}
+.video-axes[data-iq-visible="true"] .va-symbol-ticks span[data-edge="bottom"] {
+  transform: none;
+}
+.video-axes[data-iq-visible="true"] .va-symbol-ticks span[data-edge="top"] {
+  transform: translateY(100%);
 }
 
 .va-spacer .va-axis-end {

@@ -1,8 +1,20 @@
-import { axisTickValues } from "../lib/format";
 import { queryRole } from "./dom";
 
+/** PRB labels every 5, plus the last PRB when it is not already on that step. */
+function prbTickIndexes(prbCount: number): number[] {
+  const last = Math.max(0, prbCount - 1);
+  const ticks: number[] = [];
+  for (let prb = 0; prb <= last; prb += 5) ticks.push(prb);
+  const prev = ticks[ticks.length - 1];
+  if (prev !== last) {
+    if (last - prev < 6) ticks.pop();
+    ticks.push(last);
+  }
+  return ticks;
+}
+
 /**
- * Symbol along horizontal axis (equal-width columns); PRB along vertical (PRB 0 at bottom; ticks use column-reverse CSS).
+ * Symbol along horizontal axis (equal-width columns); PRB along vertical (PRB 0 at bottom).
  *
  * When `symbolStart` / `symbolStop` are supplied (server **iq_symbol_start** / **iq_symbol_stop**, both inclusive),
  * the axis only renders ticks for symbols in that window so it stays aligned with the cropped raster. Defaults
@@ -42,9 +54,14 @@ export function renderIqAxes(
   videoAxes.dataset.iqSymbolAxisCropped = cropped ? "true" : "false";
 
   prbCol.replaceChildren();
-  for (const v of axisTickValues(prbMax, 7)) {
+  const prbSpan = Math.max(1, prbCount);
+  for (const prb of prbTickIndexes(prbSpan)) {
     const span = document.createElement("span");
-    span.textContent = String(v);
+    const frac = (prb + 0.5) / prbSpan;
+    span.textContent = String(prb);
+    span.style.bottom = `${frac * 100}%`;
+    if (prb === 0) span.dataset.edge = "bottom";
+    else if (prb === prbMax) span.dataset.edge = "top";
     prbCol.appendChild(span);
   }
   symFoot.replaceChildren();
